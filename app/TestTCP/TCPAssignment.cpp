@@ -88,9 +88,10 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 		returnSystemCall(syscallUUID, ret);
 		break;
 	case GETPEERNAME:
-		//this->syscall_getpeername(syscallUUID, pid, param.param1_int,
-		//		static_cast<struct sockaddr *>(param.param2_ptr),
-		//		static_cast<socklen_t*>(param.param3_ptr));
+		ret = this->syscall_getpeername(syscallUUID, pid, param.param1_int,
+				static_cast<struct sockaddr *>(param.param2_ptr),
+				static_cast<socklen_t*>(param.param3_ptr));
+		returnSystemCall(syscallUUID, ret);
 		break;
 	default:
 		assert(0);
@@ -99,7 +100,37 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 
 void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 {
+	in_port_t dest_port;
+	struct socketInterface *temp;
+	unsigned char flag;
+	int oppo_seq, oppo_ack;
+	UUID returnUUID;
 
+	packet->readData(IH_SIZE+2, &dest_port, 2);
+	packet->readData(IH_SIZE+13, &flag, 1);
+
+	temp = find_sock_byPort(dest_port);
+
+	if(temp == NULL)
+		return;
+
+	// receiving SYNACK
+	if(temp->state == SYN_SENT && flag == FLAG_SYNACK) {
+		packet->readData(IH_SIZE+8, &oppo_ack, 4);
+		packet->readData(IH_SIZE+4, &oppo_seq, 4);
+		temp->seqnum = oppo_ack;
+		temp->acknum = htonl(ntohl(oppo_seq) + 1);
+
+		send_packet(temp, FLAG_ACK);
+
+		temp->state = ESTAB;
+		returnUUID = temp->conn_syscallUUID;
+		temp->conn_syscallUUID = 0;
+		printf("return syscall! : %d\n", returnUUID);
+		returnSystemCall(returnUUID, 0);
+	}
+
+	return;
 }
 
 void TCPAssignment::timerCallback(void* payload)
@@ -158,7 +189,7 @@ int TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int sockfd, struct so
 	temp->myaddr = (struct sockaddr_in *) malloc(addrlen);
 	memcpy(temp->myaddr, my_addr, addrlen);
 	temp->myaddr_len = addrlen;
-	temp->my_seqnum = 0;
+	temp->seqnum = 0;
 	temp->is_myaddr_exist = true;
 
 	return 0;
@@ -192,50 +223,66 @@ int TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int sockfd, struct
 		return -1;
 
 	// implicit bind.
-	my_addr = (struct sockaddr_in *) malloc(addrlen);
-	src_ip = (in_addr_t *) malloc(sizeof(in_addr_t));
-	dest_ip = (in_addr_t *) &(((struct sockaddr_in *)addr)->sin_addr.s_addr);
-	temp_port = getHost()->getRoutingTable((uint8_t *) dest_ip);
-	
-	impl_bind_res = getHost()->getIPAddr((uint8_t *)src_ip, temp_port);
+	if(!my_sock->is_myaddr_exist) {
+		my_addr = (struct sockaddr_in *) malloc(addrlen);
+		src_ip = (in_addr_t *) malloc(sizeof(in_addr_t));
+		dest_ip = (in_addr_t *) &(((struct sockaddr_in *)addr)->sin_addr.s_addr);
+		temp_port = getHost()->getRoutingTable((uint8_t *) dest_ip);
+		
+		impl_bind_res = getHost()->getIPAddr((uint8_t *)src_ip, temp_port);
 
-	if(impl_bind_res) {
-		my_addr->sin_addr.s_addr = *src_ip;
-		my_addr->sin_port = temp_port;
+		if(impl_bind_res) {
+			my_addr->sin_addr.s_addr = *src_ip;
+			my_addr->sin_port = htons(temp_port + 46000 + my_sock->sockfd);
 
-		if(is_overlapped(my_addr)) {
-			free(src_ip);
-			free(my_addr);
-			return -1;
+			if(is_overlapped(my_addr)) {
+				free(src_ip);
+				free(my_addr);
+				return -1;
+			}
+
+			my_sock->myaddr = (struct sockaddr_in *) malloc(addrlen);
+			memcpy(my_sock->myaddr, my_addr, addrlen);
+			my_sock->myaddr_len = addrlen;
+			my_sock->seqnum = 0;
+			my_sock->is_myaddr_exist = true;
 		}
 
-		my_sock->myaddr = (struct sockaddr_in *) malloc(addrlen);
-		memcpy(my_sock->myaddr, my_addr, addrlen);
-		my_sock->myaddr_len = addrlen;
-		my_sock->my_seqnum = 0;
-		my_sock->is_myaddr_exist = true;
+		free(src_ip);
+		free(my_addr);
+		
+		if(!impl_bind_res)
+			return -1;
 	}
-
-	free(src_ip);
-	free(my_addr);
-	
-	if(!impl_bind_res)
-		return -1;
 
 	// connect to opponent.
 	my_sock->oppoaddr = (struct sockaddr_in *) malloc(addrlen);
 	memcpy(my_sock->oppoaddr, addr, addrlen);
 	my_sock->oppoaddr_len = addrlen;
-	my_sock->oppo_seqnum = 0;
+	my_sock->acknum = 0;
 	my_sock->is_oppoaddr_exist = true;
 	printf("dest : %x, port : %d, src : %x, port : %d\n", ntohl(my_sock->oppoaddr->sin_addr.s_addr), my_sock->oppoaddr->sin_port, ntohl(my_sock->myaddr->sin_addr.s_addr), my_sock->myaddr->sin_port);
 
 	// send SYN packet.
-	send_SYN_packet(my_sock);
+	send_packet(my_sock, FLAG_SYN);
 	my_sock->state = SYN_SENT;
 
 	// save syscallUUID for receiving SYNACK
 	my_sock->conn_syscallUUID = syscallUUID;
+
+	return 0;
+}
+
+int TCPAssignment::syscall_getpeername(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen)
+{
+	struct socketInterface *temp;
+	temp = find_sock_byId(sockfd);
+
+	if(temp == NULL || !temp->is_oppoaddr_exist)
+		return -1;
+
+	memcpy(addr, temp->oppoaddr, temp->oppoaddr_len);
+	addrlen = &temp->oppoaddr_len;
 
 	return 0;
 }
@@ -246,6 +293,18 @@ struct socketInterface* TCPAssignment::find_sock_byId(int sockfd)
 
 	for(iter = socket_list.begin(); iter != socket_list.end(); iter++) {
 		if((*iter)->sockfd == sockfd)
+			return *iter;
+	}
+
+	return NULL;
+}
+
+struct socketInterface* TCPAssignment::find_sock_byPort(in_port_t port)
+{
+	list<struct socketInterface*>::iterator iter;
+
+	for(iter = socket_list.begin(); iter != socket_list.end(); iter++) {
+		if((*iter)->myaddr->sin_port == port)
 			return *iter;
 	}
 
@@ -271,7 +330,7 @@ bool TCPAssignment::is_overlapped(struct sockaddr_in *my_addr)
 	return false;
 }
 
-void TCPAssignment::send_SYN_packet(struct socketInterface *sender)
+void TCPAssignment::send_packet(struct socketInterface *sender, unsigned char flag)
 {
 	Packet *myPacket = this->allocatePacket(PACKETH_SIZE);
 
@@ -279,7 +338,7 @@ void TCPAssignment::send_SYN_packet(struct socketInterface *sender)
 	in_addr_t dest_ip = sender->oppoaddr->sin_addr.s_addr;
 	unsigned short checksum;
 	unsigned char header_len = 0x05 << 4;
-	unsigned char flag = 0x02;
+	unsigned short window = htons(51200);
 	uint8_t *tcp_seg = (uint8_t *)malloc(20);
 
 	myPacket->writeData(EH_SIZE+12, &src_ip, 4);
@@ -287,10 +346,11 @@ void TCPAssignment::send_SYN_packet(struct socketInterface *sender)
 	myPacket->writeData(IH_SIZE, &sender->myaddr->sin_port, 2);
 	myPacket->writeData(IH_SIZE+2, &sender->oppoaddr->sin_port, 2);
 
-	myPacket->writeData(IH_SIZE+4, &sender->my_seqnum, 4);
-	myPacket->writeData(IH_SIZE+8, &sender->oppo_seqnum, 4);
+	myPacket->writeData(IH_SIZE+4, &sender->seqnum, 4);
+	myPacket->writeData(IH_SIZE+8, &sender->acknum, 4);
 	myPacket->writeData(IH_SIZE+12, &header_len, 1);
 	myPacket->writeData(IH_SIZE+13, &flag, 1);
+	myPacket->writeData(IH_SIZE+14, &window, 2);
 
 	myPacket->readData(IH_SIZE, tcp_seg, 20);
 	checksum = htons(~NetworkUtil::tcp_sum(src_ip, dest_ip, tcp_seg, 20));
