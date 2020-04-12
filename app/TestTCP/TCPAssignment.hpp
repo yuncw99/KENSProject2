@@ -35,8 +35,11 @@ private:
 	virtual int syscall_close(UUID syscallUUID, int pid, int sockfd) final;
 	virtual int syscall_bind(UUID syscallUUID, int pid, int sockfd, struct sockaddr *my_addr, socklen_t addrlen) final;
 	virtual int syscall_getsockname(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen) final;
+	virtual int syscall_connect(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t addrlen) final;
+
 	virtual struct socketInterface* find_sock_byId(int sockfd) final;
 	virtual bool is_overlapped(struct sockaddr_in *my_addr) final;
+	virtual void send_SYN_packet(struct socketInterface *sender) final;
 
 public:
 	TCPAssignment(Host* host);
@@ -44,6 +47,10 @@ public:
 	virtual void finalize();
 	virtual ~TCPAssignment();
 	list<struct socketInterface*> socket_list;
+
+	const int PACKETH_SIZE = 54;
+	const int EH_SIZE = 14;
+	const int IH_SIZE = 34;
 
 protected:
 	virtual void systemCallback(UUID syscallUUID, int pid, const SystemCallParameter& param) final;
@@ -59,17 +66,34 @@ public:
 	static HostModule* allocate(Host* host) { return new TCPAssignment(host); }
 };
 
+enum State
+{
+	CLOSED,
+	LISTEN,
+	SYN_SENT,
+	SYN_RCVD,
+	ESTAB
+};
+
 struct socketInterface
 {
 	int sockfd;
 	int type;
 	int protocol;
-	struct sockaddr *myaddr;
+	
+	State state;
+	struct sockaddr_in *myaddr;
 	socklen_t myaddr_len;
-	struct sockaddr *oppoaddr;
-	socklen_t oppoaddr_len;
+	int my_seqnum;
+	bool is_myaddr_exist;
 
-	bool is_bind;
+	struct sockaddr_in *oppoaddr;
+	socklen_t oppoaddr_len;
+	int oppo_seqnum;
+	bool is_oppoaddr_exist;
+
+	UUID conn_syscallUUID;
+	UUID accept_syscallUUID;
 };
 
 }
