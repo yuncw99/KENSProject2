@@ -114,20 +114,37 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	if(temp == NULL)
 		return;
 
-	// receiving SYNACK
-	if(temp->state == SYN_SENT && flag == FLAG_SYNACK) {
-		packet->readData(IH_SIZE+8, &oppo_ack, 4);
-		packet->readData(IH_SIZE+4, &oppo_seq, 4);
-		temp->seqnum = oppo_ack;
-		temp->acknum = htonl(ntohl(oppo_seq) + 1);
+	packet->readData(IH_SIZE+8, &oppo_ack, 4);
+	packet->readData(IH_SIZE+4, &oppo_seq, 4);
+	temp->seqnum = oppo_ack;
+	temp->acknum = htonl(ntohl(oppo_seq) + 1);
 
-		send_packet(temp, FLAG_ACK);
+	// receiving SYNACK or duplicate connect
+	if(temp->state == SYN_SENT) {
+		if(flag == FLAG_SYN) {
+			send_packet(temp, FLAG_SYNACK);
+			temp->state = SYN_RCVD;
 
-		temp->state = ESTAB;
-		returnUUID = temp->conn_syscallUUID;
-		temp->conn_syscallUUID = 0;
-		printf("return syscall! : %d\n", returnUUID);
-		returnSystemCall(returnUUID, 0);
+		} else if(flag == FLAG_SYNACK) {
+			send_packet(temp, FLAG_ACK);
+			temp->state = ESTAB;
+
+			returnUUID = temp->conn_syscallUUID;
+			temp->conn_syscallUUID = 0;
+			printf("return syscall! : %d\n", returnUUID);
+			returnSystemCall(returnUUID, 0);
+		}
+
+	} else if(temp->state == SYN_RCVD) {
+		if(flag == FLAG_SYNACK) {
+			send_packet(temp, FLAG_ACK);
+			temp->state = ESTAB;
+
+			returnUUID = temp->conn_syscallUUID;
+			temp->conn_syscallUUID = 0;
+			printf("return syscall! : %d\n", returnUUID);
+			returnSystemCall(returnUUID, 0);
+		}
 	}
 
 	return;
