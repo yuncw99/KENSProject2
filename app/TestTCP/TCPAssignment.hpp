@@ -37,11 +37,14 @@ private:
 	virtual int syscall_getsockname(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen) final;
 	virtual int syscall_connect(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t addrlen) final;
 	virtual int syscall_getpeername(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen) final;
+	virtual int syscall_listen(UUID syscallUUID, int pid, int sockfd, int backlog) final;
 
 	virtual struct socketInterface* find_sock_byId(int sockfd) final;
 	virtual struct socketInterface* find_sock_byPort(in_port_t port) final;
+	virtual struct socketInterface* find_sock_byConnection(in_addr_t src_ip, in_port_t src_port, in_addr_t dest_ip, in_port_t dest_port) final;
 	virtual bool is_overlapped(struct sockaddr_in *my_addr) final;
 	virtual void send_packet(struct socketInterface *sender, unsigned char flag) final;
+	virtual int make_DuplSocket(struct socketInterface *listener, in_addr_t oppo_addr, in_port_t oppo_port, in_addr_t my_addr, in_port_t my_port) final;
 
 public:
 	TCPAssignment(Host* host);
@@ -70,11 +73,11 @@ public:
 
 enum State
 {
-	CLOSED,
-	LISTEN,
-	SYN_SENT,
-	SYN_RCVD,
-	ESTAB
+	TCP_CLOSED,
+	TCP_LISTEN,
+	TCP_SYN_SENT,
+	TCP_SYN_RCVD,
+	TCP_ESTAB
 };
 
 enum Flag
@@ -87,22 +90,32 @@ enum Flag
 struct socketInterface
 {
 	int sockfd;
+	int pid;
 	int type;
 	int protocol;
 	
 	State state;
+
+	// my address part
 	struct sockaddr_in *myaddr;
 	socklen_t myaddr_len;
 	int seqnum;
 	bool is_myaddr_exist;
 
+	// opponent address part
 	struct sockaddr_in *oppoaddr;
 	socklen_t oppoaddr_len;
 	int acknum;
 	bool is_oppoaddr_exist;
 
+	// for blocking syscall
 	UUID conn_syscallUUID;
 	UUID accept_syscallUUID;
+
+	// informations about listen()
+	int max_backlog;
+	int curr_backlog;
+	int parent_sockfd;
 };
 
 }
