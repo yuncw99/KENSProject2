@@ -20,8 +20,6 @@
 #include <E/E_TimerModule.hpp>
 #include <list>
 
-using namespace std;
-
 namespace E
 {
 
@@ -38,10 +36,12 @@ private:
 	virtual int syscall_connect(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t addrlen) final;
 	virtual int syscall_getpeername(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen) final;
 	virtual int syscall_listen(UUID syscallUUID, int pid, int sockfd, int backlog) final;
+	virtual int syscall_accept(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen) final;
 
-	virtual struct socketInterface* find_sock_byId(int sockfd) final;
-	virtual struct socketInterface* find_sock_byPort(in_port_t port) final;
-	virtual struct socketInterface* find_sock_byConnection(in_addr_t src_ip, in_port_t src_port, in_addr_t dest_ip, in_port_t dest_port) final;
+	virtual struct socketInterface* find_sock_byId(int pid, int sockfd) final;
+	virtual struct socketInterface* find_sock_byAddr(in_addr_t addr, in_port_t port) final;
+	virtual struct socketInterface* find_sock_byConnection(in_addr_t oppo_addr, in_port_t oppo_port, in_addr_t my_addr, in_port_t my_port) final;
+	virtual struct socketInterface* find_childsock_byId(int pid, int parentfd) final;
 	virtual bool is_overlapped(struct sockaddr_in *my_addr) final;
 	virtual void send_packet(struct socketInterface *sender, unsigned char flag) final;
 	virtual int make_DuplSocket(struct socketInterface *listener, in_addr_t oppo_addr, in_port_t oppo_port, in_addr_t my_addr, in_port_t my_port) final;
@@ -51,7 +51,8 @@ public:
 	virtual void initialize();
 	virtual void finalize();
 	virtual ~TCPAssignment();
-	list<struct socketInterface*> socket_list;
+	std::list<struct socketInterface*> socket_list;	
+	std::list<struct acceptSyscallArgs*> acceptUUID_list;
 
 	const int PACKETH_SIZE = 54;
 	const int EH_SIZE = 14;
@@ -85,6 +86,13 @@ enum Flag
 	FLAG_SYN = 0x02,
 	FLAG_SYNACK = 0x012,
 	FLAG_ACK = 0x010
+};
+
+struct acceptSyscallArgs
+{
+	UUID syscallUUID;
+	struct sockaddr *addr;
+	socklen_t *addrlen;
 };
 
 struct socketInterface
