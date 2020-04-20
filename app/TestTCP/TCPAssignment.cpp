@@ -143,7 +143,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	if(temp->state == TCP_SYN_SENT) {
 		// on duplicate connect. active
 		if(flag == FLAG_SYN) {
-			temp->seqnum = oppo_ack;
+			//temp->seqnum = oppo_ack;
 			temp->acknum = htonl(ntohl(oppo_seq) + 1);
 
 			send_packet(temp, FLAG_SYNACK);
@@ -167,7 +167,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	} else if(temp->state == TCP_SYN_RCVD) {
 		// on duplicate connect. active
 		if(flag == FLAG_SYNACK) {
-			temp->seqnum = oppo_ack;
+			//temp->seqnum = oppo_ack;
 			temp->acknum = htonl(ntohl(oppo_seq) + 1);
 
 			send_packet(temp, FLAG_ACK);
@@ -180,7 +180,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 		// on receiving ACK properly. passive
 		} else if(flag == FLAG_ACK) {
-			temp->seqnum = oppo_ack;
+			//temp->seqnum = oppo_ack;
 			temp->acknum = oppo_seq;
 
 			temp->state = TCP_ESTAB;
@@ -206,7 +206,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			dupl_fd = make_DuplSocket(temp, src_ip, src_port, dest_ip, dest_port);
 			dupl_sock = find_sock_byId(temp->pid, dupl_fd);
 
-			//dupl_sock->seqnum = oppo_ack;
+			dupl_sock->seqnum = oppo_ack;
 			dupl_sock->acknum = htonl(ntohl(oppo_seq) + 1);
 
 			send_packet(dupl_sock, FLAG_SYNACK);
@@ -232,29 +232,51 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	// handling FINACK client side
 	} else if(temp->state == TCP_FIN_WAIT1) {
 		if(flag == FLAG_ACK) {
-			temp->seqnum = oppo_ack;
+			//temp->seqnum = oppo_ack;
 			temp->acknum = oppo_seq;
 
 			temp->state = TCP_FIN_WAIT2;
-		}
-	} else if(temp->state == TCP_FIN_WAIT2 || temp->state == TCP_TIMED_WAIT) {
-		if(flag == FLAG_FINACK) {
-			temp->seqnum = oppo_ack;
+
+		// handling simultaneous close
+		} else if(flag == FLAG_FINACK) {
+			//temp->seqnum = oppo_ack;
 			temp->acknum = htonl(ntohl(oppo_seq) + 1);
 
 			send_packet(temp, FLAG_ACK);
-			temp->state = TCP_TIMED_WAIT;
+			temp->state = TCP_CLOSING;
+		}
+	} else if(temp->state == TCP_FIN_WAIT2 || temp->state == TCP_TIMED_WAIT) {
+		if(flag == FLAG_FINACK) {
+			//temp->seqnum = oppo_ack;
+			temp->acknum = htonl(ntohl(oppo_seq) + 1);
 
-			if(temp->state = TCP_TIMED_WAIT)
+			send_packet(temp, FLAG_ACK);
+
+			if(temp->state == TCP_TIMED_WAIT)
 				cancelTimer(temp->close_timer);
 			temp->close_timer = addTimer(temp, 120);
+
+			temp->state = TCP_TIMED_WAIT;
+		}
+
+	// handling simultaneous close
+	} else if(temp->state == TCP_CLOSING) {
+		if(flag == FLAG_ACK) {
+			//temp->seqnum = oppo_ack;
+			temp->acknum = oppo_seq;
+
+			if(temp->state == TCP_TIMED_WAIT)
+				cancelTimer(temp->close_timer);
+			temp->close_timer = addTimer(temp, 120);
+	
+			temp->state = TCP_TIMED_WAIT;
 		}
 
 	// handling FINACK server side
 	} else if(temp->state == TCP_ESTAB) {
 		if(flag == FLAG_FINACK) {
 			printf("received FINACK!\n");
-			temp->seqnum = oppo_ack;
+			//temp->seqnum = oppo_ack;
 			temp->acknum = htonl(ntohl(oppo_seq) + 1);
 
 			send_packet(temp, FLAG_ACK);
@@ -263,7 +285,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	} else if(temp->state == TCP_LAST_ACK) {
 		if(flag == FLAG_ACK) {
 			printf("received last ACK!\n");
-			temp->seqnum = oppo_ack;
+			//temp->seqnum = oppo_ack;
 			temp->acknum = oppo_seq;
 
 			temp->state = TCP_CLOSED;
@@ -627,6 +649,9 @@ void TCPAssignment::send_packet(struct socketInterface *sender, unsigned char fl
 
 	this->sendPacket("IPv4", myPacket);
 	free(tcp_seg);
+
+	if(flag != FLAG_SYN && flag != FLAG_ACK)
+		sender->seqnum = ntohl(htonl(sender->seqnum) + 1);
 
 	return;
 }
