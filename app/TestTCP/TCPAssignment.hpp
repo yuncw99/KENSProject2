@@ -78,14 +78,21 @@ enum State
 	TCP_LISTEN,
 	TCP_SYN_SENT,
 	TCP_SYN_RCVD,
-	TCP_ESTAB
+	TCP_ESTAB,
+	TCP_FIN_WAIT1,
+	TCP_FIN_WAIT2,
+	TCP_TIMED_WAIT,
+	TCP_CLOSE_WAIT,
+	TCP_LAST_ACK,
+	TCP_CLOSING
 };
 
 enum Flag
 {
 	FLAG_SYN = 0x02,
 	FLAG_SYNACK = 0x012,
-	FLAG_ACK = 0x010
+	FLAG_ACK = 0x010,
+	FLAG_FINACK = 0x011
 };
 
 struct acceptSyscallArgs
@@ -119,11 +126,14 @@ struct socketInterface
 	// for blocking syscall
 	UUID conn_syscallUUID;
 	UUID accept_syscallUUID;
+	UUID close_syscallUUID;
 
 	// informations about listen()
 	int max_backlog;
 	int curr_backlog;
 	int parent_sockfd;
+
+	UUID close_timer;
 };
 
 }

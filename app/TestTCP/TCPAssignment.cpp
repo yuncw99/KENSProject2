@@ -52,7 +52,9 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 		break;
 	case CLOSE:
 		ret = this->syscall_close(syscallUUID, pid, param.param1_int);
-		returnSystemCall(syscallUUID, ret);
+
+		if (ret >= -1)
+			returnSystemCall(syscallUUID, ret);
 		break;
 	case READ:
 		//this->syscall_read(syscallUUID, pid, param.param1_int, param.param2_ptr, param.param3_int);
@@ -139,54 +141,60 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	//printf("packetArrived. state : %d\n", temp->state);
 	// receiving SYNACK or duplicate connect
 	if(temp->state == TCP_SYN_SENT) {
-		temp->seqnum = oppo_ack;
-		temp->acknum = htonl(ntohl(oppo_seq) + 1);
-
 		// on duplicate connect. active
 		if(flag == FLAG_SYN) {
+			temp->seqnum = oppo_ack;
+			temp->acknum = htonl(ntohl(oppo_seq) + 1);
+
 			send_packet(temp, FLAG_SYNACK);
 			temp->state = TCP_SYN_RCVD;
 
 		// on receiving SYNACK properly. active
 		} else if(flag == FLAG_SYNACK) {
+			temp->seqnum = oppo_ack;
+			temp->acknum = htonl(ntohl(oppo_seq) + 1);
+
 			send_packet(temp, FLAG_ACK);
 			temp->state = TCP_ESTAB;
 
 			returnUUID = temp->conn_syscallUUID;
 			temp->conn_syscallUUID = -1;
-			printf("return syscall! : %d\n", returnUUID);
+			//printf("return syscall! : %d\n", returnUUID);
 			returnSystemCall(returnUUID, 0);
 		}
 
 	// handling duplicate connect
 	} else if(temp->state == TCP_SYN_RCVD) {
-		temp->seqnum = oppo_ack;
-		temp->acknum = htonl(ntohl(oppo_seq) + 1);
-
 		// on duplicate connect. active
 		if(flag == FLAG_SYNACK) {
+			temp->seqnum = oppo_ack;
+			temp->acknum = htonl(ntohl(oppo_seq) + 1);
+
 			send_packet(temp, FLAG_ACK);
 			temp->state = TCP_ESTAB;
 
 			returnUUID = temp->conn_syscallUUID;
 			temp->conn_syscallUUID = 0;
-			printf("return syscall! : %d\n", returnUUID);
+			//printf("return syscall! : %d\n", returnUUID);
 			returnSystemCall(returnUUID, 0);
 
 		// on receiving ACK properly. passive
 		} else if(flag == FLAG_ACK) {
+			temp->seqnum = oppo_ack;
+			temp->acknum = oppo_seq;
+
 			temp->state = TCP_ESTAB;
 			parent_sock = find_sock_byId(temp->pid, temp->parent_sockfd);
 			parent_sock->curr_backlog -= 1;
-			printf("ack! backlog : %d, syscallID : %d\n", parent_sock->curr_backlog, temp->accept_syscallUUID);
-			printf("myaddr : %x, myport : %d, oppoaddr : %x, oppoport : %d\n", temp->myaddr->sin_addr.s_addr, temp->myaddr->sin_port, temp->oppoaddr->sin_addr.s_addr, temp->oppoaddr->sin_port);
+			//printf("ack! backlog : %d, syscallID : %d\n", parent_sock->curr_backlog, temp->accept_syscallUUID);
+			//printf("myaddr : %x, myport : %d, oppoaddr : %x, oppoport : %d\n", temp->myaddr->sin_addr.s_addr, temp->myaddr->sin_port, temp->oppoaddr->sin_addr.s_addr, temp->oppoaddr->sin_port);
 
 			// if accept() syscall already called.
-			if(temp->accept_syscallUUID != -1) {
+			if(temp->accept_syscallUUID != (UUID)-1) {
 				temp->parent_sockfd = -1;
 				returnUUID = temp->accept_syscallUUID;
 				temp->accept_syscallUUID = -1;
-				printf("return syscall! : %d, sockfd : %d\n", returnUUID, temp->sockfd);
+				//printf("return syscall! : %d, sockfd : %d\n", returnUUID, temp->sockfd);
 				returnSystemCall(returnUUID, temp->sockfd);
 			}
 		}
@@ -204,7 +212,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			send_packet(dupl_sock, FLAG_SYNACK);
 
 			// if accept() called before dupl_sock creates.
-			if(acceptUUID_list.size() != 0 && dupl_sock->accept_syscallUUID == -1) {
+			if(acceptUUID_list.size() != 0 && dupl_sock->accept_syscallUUID == (UUID)-1) {
 				syscallArgs = acceptUUID_list.front();
 
 				dupl_sock->accept_syscallUUID = syscallArgs->syscallUUID;
@@ -218,7 +226,28 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			dupl_sock->parent_sockfd = temp->sockfd;
 			dupl_sock->state = TCP_SYN_RCVD;
 
-			printf("curr backlog : %d, max backlog : %d, fd : %d\n", temp->curr_backlog, temp->max_backlog, dupl_sock->sockfd);
+			//printf("curr backlog : %d, max backlog : %d, fd : %d\n", temp->curr_backlog, temp->max_backlog, dupl_sock->sockfd);
+		}
+
+	// handling FINACK
+	} else if(temp->state == TCP_FIN_WAIT1) {
+		if(flag == FLAG_ACK) {
+			temp->seqnum = oppo_ack;
+			temp->acknum = oppo_seq;
+
+			temp->state = TCP_FIN_WAIT2;
+		}
+	} else if(temp->state == TCP_FIN_WAIT2) {
+		if(flag == FLAG_FINACK) {
+			temp->seqnum = oppo_ack;
+			temp->acknum = htonl(ntohl(oppo_seq) + 1);
+
+			temp->state = TCP_TIMED_WAIT;
+			send_packet(temp, FLAG_ACK);
+
+			if(temp->close_timer != NULL)
+				cancelTimer(temp->close_timer);
+			temp->close_timer = addTimer(temp, 120);
 		}
 	}
 
@@ -227,7 +256,27 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 void TCPAssignment::timerCallback(void* payload)
 {
+	printf("timer!\n");
+	UUID returnUUID;
+	int sockfd;
 
+	struct socketInterface *timed_socket = (struct socketInterface *) payload;
+	cancelTimer(timed_socket->close_timer);
+
+	returnUUID = timed_socket->close_syscallUUID;
+	sockfd = timed_socket->sockfd;
+
+	timed_socket->state = TCP_CLOSED;
+	socket_list.remove(timed_socket);
+	if(timed_socket->is_myaddr_exist)
+		free(timed_socket->myaddr);
+	if(timed_socket->is_oppoaddr_exist)
+		free(timed_socket->oppoaddr);
+
+	removeFileDescriptor(timed_socket->pid, timed_socket->sockfd);
+	free(timed_socket);
+
+	returnSystemCall(returnUUID, sockfd);
 }
 
 int TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int type, int protocol)
@@ -247,6 +296,7 @@ int TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int type, int proto
 
 	new_sock->conn_syscallUUID = -1;
 	new_sock->accept_syscallUUID = -1;
+	new_sock->close_syscallUUID = -1;
 	new_sock->parent_sockfd = -1;
 
 	socket_list.push_back(new_sock);
@@ -260,6 +310,17 @@ int TCPAssignment::syscall_close(UUID syscallUUID, int pid, int sockfd)
 
 	if(temp == NULL)
 		return -1;
+
+	if(temp->is_oppoaddr_exist) {
+		// send FINACK packet.
+		send_packet(temp, FLAG_FINACK);
+		temp->state = TCP_FIN_WAIT1;
+
+		// save syscallUUID for receiving SYNACK
+		temp->close_syscallUUID = syscallUUID;
+
+		return -2;
+	}
 
 	socket_list.remove(temp);
 	if(temp->is_myaddr_exist)
@@ -276,8 +337,8 @@ int TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int sockfd, struct so
 {
 	struct socketInterface *temp;
 	temp = find_sock_byId(pid, sockfd);
-	printf("bind!, fd : %d, socket list size : %d\n", sockfd, socket_list.size());
-	printf("addr : %x, port : %d\n", ((struct sockaddr_in *)my_addr)->sin_addr.s_addr, ((struct sockaddr_in *)my_addr)->sin_port);
+	//printf("bind!, fd : %d, socket list size : %d\n", sockfd, socket_list.size());
+	//printf("addr : %x, port : %d\n", ((struct sockaddr_in *)my_addr)->sin_addr.s_addr, ((struct sockaddr_in *)my_addr)->sin_port);
 	if(temp == NULL || temp->is_myaddr_exist)
 		return -1;
 
@@ -360,7 +421,7 @@ int TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int sockfd, struct
 	my_sock->oppoaddr_len = addrlen;
 	my_sock->acknum = 0;
 	my_sock->is_oppoaddr_exist = true;
-	printf("dest : %x, port : %d, src : %x, port : %d\n", ntohl(my_sock->oppoaddr->sin_addr.s_addr), my_sock->oppoaddr->sin_port, ntohl(my_sock->myaddr->sin_addr.s_addr), my_sock->myaddr->sin_port);
+	//printf("dest : %x, port : %d, src : %x, port : %d\n", ntohl(my_sock->oppoaddr->sin_addr.s_addr), my_sock->oppoaddr->sin_port, ntohl(my_sock->myaddr->sin_addr.s_addr), my_sock->myaddr->sin_port);
 
 	// send SYN packet.
 	send_packet(my_sock, FLAG_SYN);
@@ -419,7 +480,7 @@ int TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int sockfd, struct 
 	// if there is no established socket.
 	// if no dupl sockets. save UUID in global list.
 	if(child_sock == NULL) {
-		printf("accept : no established. \n");
+		//printf("accept : no established. \n");
 
 		syscallArgs = (struct acceptSyscallArgs *) malloc(sizeof(struct acceptSyscallArgs));
 		syscallArgs->syscallUUID = syscallUUID;
@@ -432,10 +493,10 @@ int TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int sockfd, struct 
 	
 	// if dupl socket exists, save UUID in child_sock.
 	if(child_sock->state != TCP_ESTAB) {
-		printf("accept : no established. \n");
+		//printf("accept : no established. \n");
 		child_sock->accept_syscallUUID = syscallUUID;
 
-		printf("family. addr : %d, child_sock : %d\n", addr->sa_family, child_sock->oppoaddr->sin_family);
+		//printf("family. addr : %d, child_sock : %d\n", addr->sa_family, child_sock->oppoaddr->sin_family);
 		memcpy(addr, child_sock->oppoaddr, child_sock->oppoaddr_len);
 		addrlen = &child_sock->oppoaddr_len;
 
@@ -443,7 +504,7 @@ int TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int sockfd, struct 
 	}
 
 	// if there is established socket.
-	printf("accept : established. %d\n", child_sock->sockfd);
+	//printf("accept : established. %d\n", child_sock->sockfd);
 	memcpy(addr, child_sock->oppoaddr, child_sock->oppoaddr_len);
 	addrlen = &child_sock->oppoaddr_len;
 
@@ -544,7 +605,7 @@ void TCPAssignment::send_packet(struct socketInterface *sender, unsigned char fl
 
 	myPacket->readData(IH_SIZE, tcp_seg, 20);
 	checksum = htons(~NetworkUtil::tcp_sum(src_ip, dest_ip, tcp_seg, 20));
-	printf("checksum : %x\n", checksum);
+	//printf("checksum : %x\n", checksum);
 	myPacket->writeData(IH_SIZE+16, &checksum, 2);
 
 	this->sendPacket("IPv4", myPacket);
