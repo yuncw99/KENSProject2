@@ -229,7 +229,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			//printf("curr backlog : %d, max backlog : %d, fd : %d\n", temp->curr_backlog, temp->max_backlog, dupl_sock->sockfd);
 		}
 
-	// handling FINACK
+	// handling FINACK client side
 	} else if(temp->state == TCP_FIN_WAIT1) {
 		if(flag == FLAG_ACK) {
 			temp->seqnum = oppo_ack;
@@ -237,17 +237,41 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 			temp->state = TCP_FIN_WAIT2;
 		}
-	} else if(temp->state == TCP_FIN_WAIT2) {
+	} else if(temp->state == TCP_FIN_WAIT2 || temp->state == TCP_TIMED_WAIT) {
 		if(flag == FLAG_FINACK) {
 			temp->seqnum = oppo_ack;
 			temp->acknum = htonl(ntohl(oppo_seq) + 1);
 
-			temp->state = TCP_TIMED_WAIT;
 			send_packet(temp, FLAG_ACK);
+			temp->state = TCP_TIMED_WAIT;
 
-			if(temp->close_timer != NULL)
+			if(temp->state = TCP_TIMED_WAIT)
 				cancelTimer(temp->close_timer);
 			temp->close_timer = addTimer(temp, 120);
+		}
+
+	// handling FINACK server side
+	} else if(temp->state == TCP_ESTAB) {
+		if(flag == FLAG_FINACK) {
+			printf("received FINACK!\n");
+			temp->seqnum = oppo_ack;
+			temp->acknum = htonl(ntohl(oppo_seq) + 1);
+
+			send_packet(temp, FLAG_ACK);
+			temp->state = TCP_CLOSE_WAIT;
+		}
+	} else if(temp->state == TCP_LAST_ACK) {
+		if(flag == FLAG_ACK) {
+			printf("received last ACK!\n");
+			temp->seqnum = oppo_ack;
+			temp->acknum = oppo_seq;
+
+			temp->state = TCP_CLOSED;
+
+			returnUUID = temp->close_syscallUUID;
+			remove_socket(temp);
+
+			returnSystemCall(returnUUID, 0);
 		}
 	}
 
@@ -258,25 +282,15 @@ void TCPAssignment::timerCallback(void* payload)
 {
 	printf("timer!\n");
 	UUID returnUUID;
-	int sockfd;
 
 	struct socketInterface *timed_socket = (struct socketInterface *) payload;
 	cancelTimer(timed_socket->close_timer);
 
 	returnUUID = timed_socket->close_syscallUUID;
-	sockfd = timed_socket->sockfd;
-
 	timed_socket->state = TCP_CLOSED;
-	socket_list.remove(timed_socket);
-	if(timed_socket->is_myaddr_exist)
-		free(timed_socket->myaddr);
-	if(timed_socket->is_oppoaddr_exist)
-		free(timed_socket->oppoaddr);
+	remove_socket(timed_socket);
 
-	removeFileDescriptor(timed_socket->pid, timed_socket->sockfd);
-	free(timed_socket);
-
-	returnSystemCall(returnUUID, sockfd);
+	returnSystemCall(returnUUID, 0);
 }
 
 int TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int type, int protocol)
@@ -311,7 +325,8 @@ int TCPAssignment::syscall_close(UUID syscallUUID, int pid, int sockfd)
 	if(temp == NULL)
 		return -1;
 
-	if(temp->is_oppoaddr_exist) {
+	// close() syscall. active close and passive close.
+	if(temp->state == TCP_ESTAB) {
 		// send FINACK packet.
 		send_packet(temp, FLAG_FINACK);
 		temp->state = TCP_FIN_WAIT1;
@@ -320,16 +335,18 @@ int TCPAssignment::syscall_close(UUID syscallUUID, int pid, int sockfd)
 		temp->close_syscallUUID = syscallUUID;
 
 		return -2;
+	} else if(temp->state == TCP_CLOSE_WAIT) {
+		// send FINACK packet.
+		send_packet(temp, FLAG_FINACK);
+		temp->state = TCP_LAST_ACK;
+
+		// save syscallUUID for receiving SYNACK
+		temp->close_syscallUUID = syscallUUID;
+
+		return -2;
 	}
 
-	socket_list.remove(temp);
-	if(temp->is_myaddr_exist)
-		free(temp->myaddr);
-	if(temp->is_oppoaddr_exist)
-		free(temp->oppoaddr);
-	free(temp);
-	
-	removeFileDescriptor(pid, sockfd);
+	remove_socket(temp);
 	return 0;
 }
 
@@ -492,7 +509,7 @@ int TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int sockfd, struct 
 	}
 	
 	// if dupl socket exists, save UUID in child_sock.
-	if(child_sock->state != TCP_ESTAB) {
+	if(child_sock->state != TCP_ESTAB && child_sock->state != TCP_CLOSE_WAIT) {
 		//printf("accept : no established. \n");
 		child_sock->accept_syscallUUID = syscallUUID;
 
@@ -662,6 +679,18 @@ int TCPAssignment::make_DuplSocket(struct socketInterface *listener, in_addr_t o
 	socket_list.push_back(dupl_sock);
 
 	return sockfd;
+}
+
+void TCPAssignment::remove_socket(struct socketInterface *socket)
+{
+	socket_list.remove(socket);
+	if(socket->is_myaddr_exist)
+		free(socket->myaddr);
+	if(socket->is_oppoaddr_exist)
+		free(socket->oppoaddr);
+
+	removeFileDescriptor(socket->pid, socket->sockfd);
+	free(socket);
 }
 
 }

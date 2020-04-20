@@ -45,6 +45,7 @@ private:
 	virtual bool is_overlapped(struct sockaddr_in *my_addr) final;
 	virtual void send_packet(struct socketInterface *sender, unsigned char flag) final;
 	virtual int make_DuplSocket(struct socketInterface *listener, in_addr_t oppo_addr, in_port_t oppo_port, in_addr_t my_addr, in_port_t my_port) final;
+	virtual void remove_socket(struct socketInterface *socket) final;
 
 public:
 	TCPAssignment(Host* host);
