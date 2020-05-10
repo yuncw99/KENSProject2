@@ -242,7 +242,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				// input address value
 				memcpy(acceptSyscallArgs->addr, dupl_sock->oppoaddr, dupl_sock->oppoaddr_len);
 				acceptSyscallArgs->addrlen = &dupl_sock->oppoaddr_len;
-				acceptUUID_list.pop_front();
+				acceptUUID_list.remove(acceptSyscallArgs);
 				free(acceptSyscallArgs);
 			}
 			
@@ -323,6 +323,17 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			send_packet(temp, FLAG_ACK, NULL, temp->acknum);
 			temp->state = TCP_CLOSE_WAIT;
 
+			// if EOF!
+			if(temp->read_syscallUUID != (UUID)-1) {
+				readSyscallArgs = find_readSyscall_byId(temp->pid, temp->sockfd);
+				readUUID_list.remove(readSyscallArgs);
+				free(readSyscallArgs);
+
+				returnUUID = temp->read_syscallUUID;
+				temp->read_syscallUUID = -1;
+				returnSystemCall(returnUUID, -1);
+			}
+
 		// if data received.
 		} else if(flag == FLAG_ACK) {
 			//printf("received! size : %d\n", packet_data->size);
@@ -337,7 +348,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				readSyscallArgs = find_readSyscall_byId(temp->pid, temp->sockfd);
 				
 				saved_data_len = read_buffer(temp, readSyscallArgs->buf, readSyscallArgs->count);
-				readUUID_list.pop_front();
+				readUUID_list.remove(readSyscallArgs);
 				free(readSyscallArgs);
 
 				returnUUID = temp->read_syscallUUID;
@@ -364,6 +375,7 @@ void TCPAssignment::timerCallback(void* payload)
 
 	returnSystemCall(returnUUID, 0);
 }
+
 
 int TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int type, int protocol)
 {
@@ -621,6 +633,9 @@ int TCPAssignment::syscall_read(UUID syscallUUID, int pid, int sockfd, void *buf
 	if(temp == NULL)
 		return -1;
 
+	if(temp->state != TCP_ESTAB)
+		return -1;
+
 	if(temp->receiver_buffer->empty()) {
 		syscallArgs = (struct readSyscallArgs *) malloc(sizeof(struct readSyscallArgs));
 		syscallArgs->syscallUUID = syscallUUID;
@@ -632,6 +647,7 @@ int TCPAssignment::syscall_read(UUID syscallUUID, int pid, int sockfd, void *buf
 		readUUID_list.push_back(syscallArgs);
 
 		temp->read_syscallUUID = syscallUUID;
+		//printf("buffer empty\n");
 		return 0;
 	}
 
@@ -642,6 +658,7 @@ int TCPAssignment::syscall_write(UUID syscallUUID, int pid, int sockfd, const vo
 {
 	return -1;
 }
+
 
 struct socketInterface* TCPAssignment::find_sock_byId(int pid, int sockfd)
 {
@@ -716,6 +733,7 @@ struct readSyscallArgs* TCPAssignment::find_readSyscall_byId(int pid, int sockfd
 
 	return NULL;
 }
+
 
 bool TCPAssignment::is_overlapped(struct sockaddr_in *my_addr)
 {
@@ -808,6 +826,9 @@ int TCPAssignment::make_DuplSocket(struct socketInterface *listener, in_addr_t o
 	dupl_sock->sender_unused = 51200;
 	dupl_sock->receiver_unused = 51200;
 
+	dupl_sock->sender_buffer = new std::list<struct packetData*>();
+	dupl_sock->receiver_buffer = new std::list<struct packetData*>();
+
 	// change listener myaddr information. 0 to real addr.
 	listener->myaddr->sin_addr.s_addr = my_addr;
 	listener->myaddr->sin_port = my_port;
@@ -848,8 +869,18 @@ void TCPAssignment::remove_socket(struct socketInterface *socket)
 	if(socket->is_oppoaddr_exist)
 		free(socket->oppoaddr);
 
-	//delete socket->sender_buffer;
-	//delete socket->receiver_buffer;
+	while(!socket->sender_buffer->empty()) {
+		free(socket->sender_buffer->front()->data);
+		delete socket->sender_buffer->front();
+		socket->sender_buffer->pop_front();
+	}
+	while(!socket->receiver_buffer->empty()) {
+		free(socket->receiver_buffer->front()->data);
+		delete socket->receiver_buffer->front();
+		socket->receiver_buffer->pop_front();
+	}
+	delete socket->sender_buffer;
+	delete socket->receiver_buffer;
 
 	removeFileDescriptor(socket->pid, socket->sockfd);
 	free(socket);
@@ -873,14 +904,14 @@ size_t TCPAssignment::read_buffer(struct socketInterface *receiver, void *buf, s
 
 		// partially read data
 		if(count < (packetData->size - packetData->now)) {
-			memcpy(buf, packetData->data + packetData->now, count);
+			memcpy(buf, (char*)packetData->data + packetData->now, count);
 			saved_data_len += count;
 			packetData->now += count;
 			receiver->receiver_unused += count;
 
 		// if all data in the packet can be read
 		} else {
-			memcpy(buf, packetData->data + packetData->now, packetData->size - packetData->now);
+			memcpy(buf, (char*)packetData->data + packetData->now, packetData->size - packetData->now);
 			saved_data_len += (packetData->size - packetData->now);
 			receiver->receiver_buffer->pop_front();
 			receiver->receiver_unused += (packetData->size - packetData->now);
