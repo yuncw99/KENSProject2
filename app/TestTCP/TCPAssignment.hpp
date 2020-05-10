@@ -37,15 +37,21 @@ private:
 	virtual int syscall_getpeername(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen) final;
 	virtual int syscall_listen(UUID syscallUUID, int pid, int sockfd, int backlog) final;
 	virtual int syscall_accept(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen) final;
+	virtual int syscall_read(UUID syscallUUID, int pid, int sockfd, void *buf, size_t count) final;
+	virtual int syscall_write(UUID syscallUUID, int pid, int sockfd, const void *buf, size_t count) final;
 
 	virtual struct socketInterface* find_sock_byId(int pid, int sockfd) final;
 	virtual struct socketInterface* find_sock_byAddr(in_addr_t addr, in_port_t port) final;
 	virtual struct socketInterface* find_sock_byConnection(in_addr_t oppo_addr, in_port_t oppo_port, in_addr_t my_addr, in_port_t my_port) final;
 	virtual struct socketInterface* find_childsock_byId(int pid, int parentfd) final;
+	virtual struct acceptSyscallArgs* find_acceptSyscall_byId(int pid, int parentfd) final;
+	virtual struct readSyscallArgs* find_readSyscall_byId(int pid, int sockfd) final;
+
 	virtual bool is_overlapped(struct sockaddr_in *my_addr) final;
-	virtual void send_packet(struct socketInterface *sender, unsigned char flag) final;
+	virtual void send_packet(struct socketInterface *sender, unsigned char flag, struct packetData *data, int acknum) final;
 	virtual int make_DuplSocket(struct socketInterface *listener, in_addr_t oppo_addr, in_port_t oppo_port, in_addr_t my_addr, in_port_t my_port) final;
 	virtual void remove_socket(struct socketInterface *socket) final;
+	virtual size_t read_buffer(struct socketInterface *receiver, void *buf, size_t count) final;
 
 public:
 	TCPAssignment(Host* host);
@@ -54,10 +60,11 @@ public:
 	virtual ~TCPAssignment();
 	std::list<struct socketInterface*> socket_list;	
 	std::list<struct acceptSyscallArgs*> acceptUUID_list;
+	std::list<struct readSyscallArgs*> readUUID_list;
 
-	const int PACKETH_SIZE = 54;
-	const int EH_SIZE = 14;
-	const int IH_SIZE = 34;
+	const size_t PACKETH_SIZE = 54;
+	const size_t EH_SIZE = 14;
+	const size_t IH_SIZE = 34;
 
 protected:
 	virtual void systemCallback(UUID syscallUUID, int pid, const SystemCallParameter& param) final;
@@ -99,8 +106,29 @@ enum Flag
 struct acceptSyscallArgs
 {
 	UUID syscallUUID;
+	int pid;
+	int parentfd;
+
 	struct sockaddr *addr;
 	socklen_t *addrlen;
+};
+
+struct readSyscallArgs
+{
+	UUID syscallUUID;
+	int pid;
+	int sockfd;
+
+	void *buf;
+	size_t count;
+};
+
+struct packetData
+{
+	void* data;
+	size_t size;
+	int num;
+	size_t now;
 };
 
 struct socketInterface
@@ -128,6 +156,7 @@ struct socketInterface
 	UUID conn_syscallUUID;
 	UUID accept_syscallUUID;
 	UUID close_syscallUUID;
+	UUID read_syscallUUID;
 
 	// informations about listen()
 	int max_backlog;
@@ -135,6 +164,12 @@ struct socketInterface
 	int parent_sockfd;
 
 	UUID close_timer;
+
+	// internal sender buffer
+	std::list<struct packetData *> *sender_buffer;
+	size_t sender_unused;
+	std::list<struct packetData *> *receiver_buffer;
+	size_t receiver_unused;
 };
 
 }
