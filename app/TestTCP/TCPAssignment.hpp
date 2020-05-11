@@ -45,13 +45,14 @@ private:
 	virtual struct socketInterface* find_sock_byConnection(in_addr_t oppo_addr, in_port_t oppo_port, in_addr_t my_addr, in_port_t my_port) final;
 	virtual struct socketInterface* find_childsock_byId(int pid, int parentfd) final;
 	virtual struct acceptSyscallArgs* find_acceptSyscall_byId(int pid, int parentfd) final;
-	virtual struct readSyscallArgs* find_readSyscall_byId(int pid, int sockfd) final;
+	virtual struct dataSyscallArgs* find_dataSyscall_byUUID(UUID syscallUUID) final;
 
 	virtual bool is_overlapped(struct sockaddr_in *my_addr) final;
 	virtual void send_packet(struct socketInterface *sender, unsigned char flag, struct packetData *data, int acknum) final;
 	virtual int make_DuplSocket(struct socketInterface *listener, in_addr_t oppo_addr, in_port_t oppo_port, in_addr_t my_addr, in_port_t my_port) final;
 	virtual void remove_socket(struct socketInterface *socket) final;
 	virtual size_t read_buffer(struct socketInterface *receiver, void *buf, size_t count) final;
+	virtual size_t write_buffer(struct socketInterface *sender, void *buf, size_t count) final;
 
 public:
 	TCPAssignment(Host* host);
@@ -60,7 +61,7 @@ public:
 	virtual ~TCPAssignment();
 	std::list<struct socketInterface*> socket_list;	
 	std::list<struct acceptSyscallArgs*> acceptUUID_list;
-	std::list<struct readSyscallArgs*> readUUID_list;
+	std::list<struct dataSyscallArgs*> dataUUID_list;
 
 	const size_t PACKETH_SIZE = 54;
 	const size_t EH_SIZE = 14;
@@ -113,11 +114,9 @@ struct acceptSyscallArgs
 	socklen_t *addrlen;
 };
 
-struct readSyscallArgs
+struct dataSyscallArgs
 {
 	UUID syscallUUID;
-	int pid;
-	int sockfd;
 
 	void *buf;
 	size_t count;
@@ -127,7 +126,7 @@ struct packetData
 {
 	void* data;
 	size_t size;
-	int num;
+	int start_num;
 	size_t now;
 };
 
@@ -157,6 +156,7 @@ struct socketInterface
 	UUID accept_syscallUUID;
 	UUID close_syscallUUID;
 	UUID read_syscallUUID;
+	UUID write_syscallUUID;
 
 	// informations about listen()
 	int max_backlog;
@@ -168,6 +168,7 @@ struct socketInterface
 	// internal sender buffer
 	std::list<struct packetData *> *sender_buffer;
 	size_t sender_unused;
+	size_t oppo_window;
 	std::list<struct packetData *> *receiver_buffer;
 	size_t receiver_unused;
 };
