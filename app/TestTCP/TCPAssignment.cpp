@@ -130,6 +130,8 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	void *temp_data;
 	size_t saved_data_len;
 	size_t packet_size;
+	unsigned short packet_checksum, calc_checksum;
+	unsigned short zero = 0;
 
 	// read packet
 	packet->readData(EH_SIZE+12, &src_ip, 4);
@@ -141,9 +143,23 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	packet->readData(IH_SIZE+8, &oppo_ack, 4);
 	packet->readData(IH_SIZE+4, &oppo_seq, 4);
 	packet->readData(IH_SIZE+14, &oppo_window, 2);
+	packet->readData(IH_SIZE+16, &packet_checksum, 2);
 
 	//printf("packet received! size : %d\n", packet->getSize());
-	
+	uint8_t *tcp_seg = (uint8_t *)malloc(packet->getSize() - IH_SIZE);
+	packet->writeData(IH_SIZE+16, &zero, 2);
+
+	packet->readData(IH_SIZE, tcp_seg, packet->getSize() - IH_SIZE);
+	calc_checksum = htons(~NetworkUtil::tcp_sum(src_ip, dest_ip, tcp_seg, packet->getSize() - IH_SIZE));
+	//printf("packet_checksum : %x, calc_checksum : %x\n", packet_checksum, calc_checksum);
+	free(tcp_seg);
+
+	// if checksum is not valid, just ignore the packet.
+	if(packet_checksum != calc_checksum) {
+		printf("not valid checksum!\n");
+		return;
+	}
+
 	packet_size = packet->getSize() - PACKETH_SIZE;
 	// if packet has payload
 	if(packet_size > 0) {
@@ -276,7 +292,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				packet_data = temp->sender_buffer->front();
 					
 				// if proper packet is received.
-				if(ntohl(htonl(packet_data->start_num) + packet_data->size) == oppo_ack) {
+				if(htonl(ntohl(packet_data->start_num) + packet_data->size) == oppo_ack) {
 					//printf("proper packet! : %d\n", ntohl(oppo_ack));
 					temp->sender_unused += packet_data->size;
 					temp->sender_buffer->pop_front();
@@ -389,7 +405,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 					packet_data = temp->sender_buffer->front();
 					
 					// if proper packet is received.
-					if(ntohl(htonl(packet_data->start_num) + packet_data->size) == oppo_ack) {
+					if(htonl(ntohl(packet_data->start_num) + packet_data->size) == oppo_ack) {
 						//printf("proper packet! : %d\n", ntohl(oppo_ack));
 						temp->sender_unused += packet_data->size;
 						temp->sender_buffer->pop_front();
@@ -847,13 +863,16 @@ void TCPAssignment::send_packet(struct socketInterface *sender, unsigned char fl
 	Packet *myPacket;
 
 	size_t tcp_packet_len;
+	int seqnum;
 
 	if(data == NULL) {
 		myPacket = this->allocatePacket(PACKETH_SIZE);
-		tcp_packet_len = 20;
+		tcp_packet_len = PACKETH_SIZE - IH_SIZE;
+		seqnum = sender->seqnum;
 	} else {
 		myPacket = this->allocatePacket(PACKETH_SIZE + data->size);
-		tcp_packet_len = 20 + data->size;
+		tcp_packet_len = PACKETH_SIZE - IH_SIZE + data->size;
+		seqnum = data->start_num;
 	}
 
 	in_addr_t src_ip = sender->myaddr->sin_addr.s_addr;
@@ -869,7 +888,7 @@ void TCPAssignment::send_packet(struct socketInterface *sender, unsigned char fl
 	myPacket->writeData(IH_SIZE, &sender->myaddr->sin_port, 2);
 	myPacket->writeData(IH_SIZE+2, &sender->oppoaddr->sin_port, 2);
 
-	myPacket->writeData(IH_SIZE+4, &sender->seqnum, 4);
+	myPacket->writeData(IH_SIZE+4, &seqnum, 4);
 	myPacket->writeData(IH_SIZE+8, &acknum, 4);
 	myPacket->writeData(IH_SIZE+12, &header_len, 1);
 	myPacket->writeData(IH_SIZE+13, &flag, 1);
@@ -1050,7 +1069,7 @@ size_t TCPAssignment::write_buffer(struct socketInterface *sender, void *buf, si
 		}
 
 		temp_data = malloc(packet_data->size);
-		memcpy(temp_data, buf + saved_data_len, packet_data->size);
+		memcpy(temp_data, (char*)buf + saved_data_len, packet_data->size);
 
 		packet_data->data = temp_data;
 		packet_data->now = 0;
