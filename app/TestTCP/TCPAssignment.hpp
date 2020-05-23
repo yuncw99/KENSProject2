@@ -40,19 +40,21 @@ private:
 	virtual int syscall_read(UUID syscallUUID, int pid, int sockfd, void *buf, size_t count) final;
 	virtual int syscall_write(UUID syscallUUID, int pid, int sockfd, const void *buf, size_t count) final;
 
-	virtual struct socketInterface* find_sock_byId(int pid, int sockfd) final;
-	virtual struct socketInterface* find_sock_byAddr(in_addr_t addr, in_port_t port) final;
-	virtual struct socketInterface* find_sock_byConnection(in_addr_t oppo_addr, in_port_t oppo_port, in_addr_t my_addr, in_port_t my_port) final;
-	virtual struct socketInterface* find_childsock_byId(int pid, int parentfd) final;
-	virtual struct acceptSyscallArgs* find_acceptSyscall_byId(int pid, int parentfd) final;
-	virtual struct dataSyscallArgs* find_dataSyscall_byUUID(UUID syscallUUID) final;
-
 	virtual bool is_overlapped(struct sockaddr_in *my_addr) final;
 	virtual void send_packet(struct socketInterface *sender, unsigned char flag, struct packetData *data, int acknum) final;
 	virtual int make_DuplSocket(struct socketInterface *listener, in_addr_t oppo_addr, in_port_t oppo_port, in_addr_t my_addr, in_port_t my_port) final;
 	virtual void remove_socket(struct socketInterface *socket) final;
 	virtual size_t read_buffer(struct socketInterface *receiver, void *buf, size_t count) final;
 	virtual size_t write_buffer(struct socketInterface *sender, void *buf, size_t count) final;
+	virtual struct packetData* make_PacketData(void* data, size_t size, int start_num) final;
+
+	virtual struct socketInterface* find_sock_byId(int pid, int sockfd) final;
+	virtual struct socketInterface* find_sock_byAddr(in_addr_t addr, in_port_t port) final;
+	virtual struct socketInterface* find_sock_byConnection(in_addr_t oppo_addr, in_port_t oppo_port, in_addr_t my_addr, in_port_t my_port) final;
+	virtual struct socketInterface* find_childsock_byId(int pid, int parentfd) final;
+	virtual struct acceptSyscallArgs* find_acceptSyscall_byId(int pid, int parentfd) final;
+	virtual struct dataSyscallArgs* find_dataSyscall_byUUID(UUID syscallUUID) final;
+	virtual void push_packet_sortbySeqnum(std::list<struct packetData *> *buffer, struct packetData *data) final;
 
 public:
 	TCPAssignment(Host* host);

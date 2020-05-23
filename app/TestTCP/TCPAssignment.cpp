@@ -129,7 +129,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	struct packetData *packet_data;
 	void *temp_data;
 	size_t saved_data_len;
-	size_t packet_size;
+	size_t packetdata_size;
 	unsigned short packet_checksum, calc_checksum;
 	unsigned short zero = 0;
 
@@ -160,16 +160,11 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		return;
 	}
 
-	packet_size = packet->getSize() - PACKETH_SIZE;
+	packetdata_size = packet->getSize() - PACKETH_SIZE;
 	// if packet has payload
-	if(packet_size > 0) {
-		packet_data = new struct packetData();
-		packet_data->size = packet_size;
-		temp_data = malloc(packet_data->size);
-
-		packet->readData(PACKETH_SIZE, temp_data, packet_data->size);
-		packet_data->data = temp_data;
-		packet_data->now = 0;
+	if(packetdata_size > 0) {
+		temp_data = malloc(packetdata_size);
+		packet->readData(PACKETH_SIZE, temp_data, packetdata_size);
 	}
 	
 	this->freePacket(packet);
@@ -379,10 +374,12 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			//printf("received! size : %d\n", packet_data->size);
 
 			// if data is received.
-			if(packet_size > 0) {
-				temp->acknum = htonl(ntohl(oppo_seq) + packet_data->size);
-				packet_data->start_num = oppo_seq;
-				temp->receiver_buffer->push_back(packet_data);
+			if(packetdata_size > 0) {
+				packet_data = make_PacketData(temp_data, packetdata_size, oppo_seq);
+				//temp->acknum = htonl(ntohl(oppo_seq) + packet_data->size);
+
+				//temp->receiver_buffer->push_back(packet_data);
+				push_packet_sortbySeqnum(temp->receiver_buffer, packet_data);
 				temp->receiver_unused -= packet_data->size;
 
 				// if read() already called
@@ -505,7 +502,7 @@ int TCPAssignment::syscall_close(UUID syscallUUID, int pid, int sockfd)
 		temp->close_syscallUUID = syscallUUID;
 
 		return -2;
-	} else if(temp->state == TCP_CLOSE_WAIT) {
+	} else if(temp->state == TCP_CLOSE_WAIT || temp->state == TCP_CLOSING) {
 		// send FINACK packet.
 		send_packet(temp, FLAG_FINACK, NULL, temp->acknum);
 		temp->state = TCP_LAST_ACK;
@@ -763,82 +760,6 @@ int TCPAssignment::syscall_write(UUID syscallUUID, int pid, int sockfd, const vo
 	return write_buffer(temp, (void *)buf, count);
 }
 
-
-struct socketInterface* TCPAssignment::find_sock_byId(int pid, int sockfd)
-{
-	std::list<struct socketInterface*>::iterator iter;
-
-	for(iter = socket_list.begin(); iter != socket_list.end(); iter++) {
-		if((*iter)->pid == pid && (*iter)->sockfd == sockfd)
-			return *iter;
-	}
-
-	return NULL;
-}
-
-struct socketInterface* TCPAssignment::find_sock_byAddr(in_addr_t addr, in_port_t port)
-{
-	std::list<struct socketInterface*>::iterator iter;
-
-	for(iter = socket_list.begin(); iter != socket_list.end(); iter++) {
-		if((*iter)->is_myaddr_exist && ((*iter)->myaddr->sin_addr.s_addr == addr || (*iter)->myaddr->sin_addr.s_addr == 0) && (*iter)->myaddr->sin_port == port)
-			return *iter;
-	}
-
-	return NULL;
-}
-
-struct socketInterface* TCPAssignment::find_sock_byConnection(in_addr_t oppo_addr, in_port_t oppo_port, in_addr_t my_addr, in_port_t my_port)
-{
-	std::list<struct socketInterface*>::iterator iter;
-
-	for(iter = socket_list.begin(); iter != socket_list.end(); iter++) {
-		if((*iter)->is_myaddr_exist && (*iter)->myaddr->sin_addr.s_addr == my_addr && (*iter)->myaddr->sin_port == my_port) {
-			if((*iter)->is_oppoaddr_exist && (*iter)->oppoaddr->sin_addr.s_addr == oppo_addr && (*iter)->oppoaddr->sin_port == oppo_port)
-				return *iter;
-		}
-	}
-
-	return NULL;
-}
-
-struct socketInterface* TCPAssignment::find_childsock_byId(int pid, int parentfd)
-{
-	std::list<struct socketInterface*>::iterator iter;
-
-	for(iter = socket_list.begin(); iter != socket_list.end(); iter++) {
-		if((*iter)->pid == pid && (*iter)->parent_sockfd == parentfd)
-			return *iter;
-	}
-
-	return NULL;
-}
-
-struct acceptSyscallArgs* TCPAssignment::find_acceptSyscall_byId(int pid, int parentfd)
-{
-	std::list<struct acceptSyscallArgs*>::iterator iter;
-
-	for(iter = acceptUUID_list.begin(); iter != acceptUUID_list.end(); iter++) {
-		if((*iter)->pid == pid && (*iter)->parentfd == parentfd)
-			return *iter;
-	}
-
-	return NULL;
-}
-
-struct dataSyscallArgs* TCPAssignment::find_dataSyscall_byUUID(UUID syscallUUID)
-{
-	std::list<struct dataSyscallArgs*>::iterator iter;
-
-	for(iter = dataUUID_list.begin(); iter != dataUUID_list.end(); iter++) {
-		if((*iter)->syscallUUID == syscallUUID)
-			return *iter;
-	}
-
-	return NULL;
-}
-
-
 bool TCPAssignment::is_overlapped(struct sockaddr_in *my_addr)
 {
 	std::list<struct socketInterface*>::iterator iter;
@@ -1007,7 +928,6 @@ size_t TCPAssignment::read_buffer(struct socketInterface *receiver, void *buf, s
 {
 	size_t saved_data_len = 0;
 	bool is_initial = false;
-	int data_num;
 	struct packetData *packetData;
 
 	while(!receiver->receiver_buffer->empty() && saved_data_len < count) {
@@ -1015,9 +935,16 @@ size_t TCPAssignment::read_buffer(struct socketInterface *receiver, void *buf, s
 
 		packetData = receiver->receiver_buffer->front();
 
-		if(packetData->now == 0)
+		// if read data in each packet first.
+		if(packetData->now == 0) {
 			is_initial = true;
-		data_num = htonl(ntohl(packetData->start_num) + packetData->size);
+			// if seqnum of packetData and last acknum is different, it is not proper data.
+			// then, send last successful acknum.
+			if(packetData->start_num != receiver->acknum) {
+				send_packet(receiver, FLAG_ACK, NULL, receiver->acknum);
+				return saved_data_len;
+			}
+		}
 
 		// partially read data
 		if(count < (packetData->size - packetData->now)) {
@@ -1037,8 +964,10 @@ size_t TCPAssignment::read_buffer(struct socketInterface *receiver, void *buf, s
 		}
 
 		//printf("saved data : %d\n", saved_data_len);
-		if(is_initial)
-			send_packet(receiver, FLAG_ACK, NULL, data_num);
+		if(is_initial) {
+			receiver->acknum = htonl(ntohl(packetData->start_num) + packetData->size);
+			send_packet(receiver, FLAG_ACK, NULL, receiver->acknum);
+		}
 	}
 
 	return saved_data_len;
@@ -1047,7 +976,7 @@ size_t TCPAssignment::read_buffer(struct socketInterface *receiver, void *buf, s
 size_t TCPAssignment::write_buffer(struct socketInterface *sender, void *buf, size_t count)
 {
 	size_t saved_data_len = 0;
-	size_t temp_size;
+	size_t temp_size, packet_size;
 	struct packetData *packet_data;
 	void *temp_data;
 
@@ -1059,22 +988,17 @@ size_t TCPAssignment::write_buffer(struct socketInterface *sender, void *buf, si
 	}
 
 	while(saved_data_len < temp_size) {
-		packet_data = new struct packetData();
-
 		// chunk packet to 512 bytes
 		if((temp_size - saved_data_len) > 512) {
-			packet_data->size = 512;
+			packet_size = 512;
 		} else {	
-			packet_data->size = temp_size - saved_data_len;
+			packet_size = temp_size - saved_data_len;
 		}
 
-		temp_data = malloc(packet_data->size);
-		memcpy(temp_data, (char*)buf + saved_data_len, packet_data->size);
+		temp_data = malloc(packet_size);
+		memcpy(temp_data, (char*)buf + saved_data_len, packet_size);
 
-		packet_data->data = temp_data;
-		packet_data->now = 0;
-		// desired acknum of last packet.
-		packet_data->start_num = sender->seqnum;
+		packet_data = make_PacketData(temp_data, packet_size, sender->seqnum);
 
 		sender->sender_buffer->push_back(packet_data);
 		sender->sender_unused -= packet_data->size;
@@ -1084,6 +1008,109 @@ size_t TCPAssignment::write_buffer(struct socketInterface *sender, void *buf, si
 	}
 
 	return saved_data_len;
+}
+
+struct packetData* TCPAssignment::make_PacketData(void* data, size_t size, int start_num)
+{
+	struct packetData *packet_data;
+	packet_data = new struct packetData();
+	packet_data->data = data;
+	packet_data->size = size;
+	packet_data->start_num = start_num;
+	packet_data->now = 0;
+
+	return packet_data;
+}
+
+
+
+struct socketInterface* TCPAssignment::find_sock_byId(int pid, int sockfd)
+{
+	std::list<struct socketInterface*>::iterator iter;
+
+	for(iter = socket_list.begin(); iter != socket_list.end(); iter++) {
+		if((*iter)->pid == pid && (*iter)->sockfd == sockfd)
+			return *iter;
+	}
+
+	return NULL;
+}
+
+struct socketInterface* TCPAssignment::find_sock_byAddr(in_addr_t addr, in_port_t port)
+{
+	std::list<struct socketInterface*>::iterator iter;
+
+	for(iter = socket_list.begin(); iter != socket_list.end(); iter++) {
+		if((*iter)->is_myaddr_exist && ((*iter)->myaddr->sin_addr.s_addr == addr || (*iter)->myaddr->sin_addr.s_addr == 0) && (*iter)->myaddr->sin_port == port)
+			return *iter;
+	}
+
+	return NULL;
+}
+
+struct socketInterface* TCPAssignment::find_sock_byConnection(in_addr_t oppo_addr, in_port_t oppo_port, in_addr_t my_addr, in_port_t my_port)
+{
+	std::list<struct socketInterface*>::iterator iter;
+
+	for(iter = socket_list.begin(); iter != socket_list.end(); iter++) {
+		if((*iter)->is_myaddr_exist && (*iter)->myaddr->sin_addr.s_addr == my_addr && (*iter)->myaddr->sin_port == my_port) {
+			if((*iter)->is_oppoaddr_exist && (*iter)->oppoaddr->sin_addr.s_addr == oppo_addr && (*iter)->oppoaddr->sin_port == oppo_port)
+				return *iter;
+		}
+	}
+
+	return NULL;
+}
+
+struct socketInterface* TCPAssignment::find_childsock_byId(int pid, int parentfd)
+{
+	std::list<struct socketInterface*>::iterator iter;
+
+	for(iter = socket_list.begin(); iter != socket_list.end(); iter++) {
+		if((*iter)->pid == pid && (*iter)->parent_sockfd == parentfd)
+			return *iter;
+	}
+
+	return NULL;
+}
+
+struct acceptSyscallArgs* TCPAssignment::find_acceptSyscall_byId(int pid, int parentfd)
+{
+	std::list<struct acceptSyscallArgs*>::iterator iter;
+
+	for(iter = acceptUUID_list.begin(); iter != acceptUUID_list.end(); iter++) {
+		if((*iter)->pid == pid && (*iter)->parentfd == parentfd)
+			return *iter;
+	}
+
+	return NULL;
+}
+
+struct dataSyscallArgs* TCPAssignment::find_dataSyscall_byUUID(UUID syscallUUID)
+{
+	std::list<struct dataSyscallArgs*>::iterator iter;
+
+	for(iter = dataUUID_list.begin(); iter != dataUUID_list.end(); iter++) {
+		if((*iter)->syscallUUID == syscallUUID)
+			return *iter;
+	}
+
+	return NULL;
+}
+
+void TCPAssignment::push_packet_sortbySeqnum(std::list<struct packetData *> *buffer, struct packetData *data)
+{
+	std::list<struct packetData*>::iterator iter;
+
+	for(iter = buffer->begin(); iter != buffer->end(); iter++) {
+		if((*iter)->start_num >= data->start_num) {
+			buffer->insert(iter, data);
+			return;
+		}
+	}
+
+	buffer->push_back(data);
+	return;
 }
 
 }
