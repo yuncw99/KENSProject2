@@ -378,9 +378,15 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				packet_data = make_PacketData(temp_data, packetdata_size, oppo_seq);
 				//temp->acknum = htonl(ntohl(oppo_seq) + packet_data->size);
 
-				//temp->receiver_buffer->push_back(packet_data);
+				// if receiver buffer is empty, set seqnum_recentRead to packet_data->start_num.
+				if(temp->receiver_buffer->empty())
+					temp->seqnum_recentRead = packet_data->start_num;
+				
 				push_packet_sortbySeqnum(temp->receiver_buffer, packet_data);
 				temp->receiver_unused -= packet_data->size;
+
+				set_acknumForPacket(temp);
+				send_packet(temp, FLAG_ACK, NULL, temp->acknum);
 
 				// if read() already called
 				if(temp->read_syscallUUID != (UUID)-1) {
@@ -479,6 +485,7 @@ int TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int type, int proto
 
 	new_sock->sender_buffer = new std::list<struct packetData*>();
 	new_sock->receiver_buffer = new std::list<struct packetData*>();
+	new_sock->seqnum_recentRead = 0;
 
 	socket_list.push_back(new_sock);
 	return sockfd;
@@ -863,6 +870,7 @@ int TCPAssignment::make_DuplSocket(struct socketInterface *listener, in_addr_t o
 
 	dupl_sock->sender_buffer = new std::list<struct packetData*>();
 	dupl_sock->receiver_buffer = new std::list<struct packetData*>();
+	dupl_sock->seqnum_recentRead = 0;
 
 	// change listener myaddr information. 0 to real addr.
 	listener->myaddr->sin_addr.s_addr = my_addr;
@@ -927,7 +935,6 @@ void TCPAssignment::remove_socket(struct socketInterface *socket)
 size_t TCPAssignment::read_buffer(struct socketInterface *receiver, void *buf, size_t count)
 {
 	size_t saved_data_len = 0;
-	bool is_initial = false;
 	struct packetData *packetData;
 
 	while(!receiver->receiver_buffer->empty() && saved_data_len < count) {
@@ -937,13 +944,12 @@ size_t TCPAssignment::read_buffer(struct socketInterface *receiver, void *buf, s
 
 		// if read data in each packet first.
 		if(packetData->now == 0) {
-			is_initial = true;
 			// if seqnum of packetData and last acknum is different, it is not proper data.
 			// then, send last successful acknum.
-			if(packetData->start_num != receiver->acknum) {
-				send_packet(receiver, FLAG_ACK, NULL, receiver->acknum);
+			if(packetData->start_num != receiver->seqnum_recentRead)
 				return saved_data_len;
-			}
+
+			receiver->seqnum_recentRead = htonl(ntohl(packetData->start_num) + packetData->size);
 		}
 
 		// partially read data
@@ -964,10 +970,6 @@ size_t TCPAssignment::read_buffer(struct socketInterface *receiver, void *buf, s
 		}
 
 		//printf("saved data : %d\n", saved_data_len);
-		if(is_initial) {
-			receiver->acknum = htonl(ntohl(packetData->start_num) + packetData->size);
-			send_packet(receiver, FLAG_ACK, NULL, receiver->acknum);
-		}
 	}
 
 	return saved_data_len;
@@ -1020,6 +1022,21 @@ struct packetData* TCPAssignment::make_PacketData(void* data, size_t size, int s
 	packet_data->now = 0;
 
 	return packet_data;
+}
+
+void TCPAssignment::set_acknumForPacket(struct socketInterface *receiver)
+{
+	std::list<struct packetData*>::iterator iter;
+
+	for(iter = receiver->receiver_buffer->begin(); iter != receiver->receiver_buffer->end(); iter++) {
+		if((*iter)->start_num == receiver->acknum) {
+			receiver->acknum = htonl(ntohl((*iter)->start_num) + (*iter)->size);
+		} else {
+			break;
+		}
+	}
+
+	return;
 }
 
 

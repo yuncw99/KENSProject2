@@ -47,6 +47,7 @@ private:
 	virtual size_t read_buffer(struct socketInterface *receiver, void *buf, size_t count) final;
 	virtual size_t write_buffer(struct socketInterface *sender, void *buf, size_t count) final;
 	virtual struct packetData* make_PacketData(void* data, size_t size, int start_num) final;
+	virtual void set_acknumForPacket(struct socketInterface *receiver) final;
 
 	virtual struct socketInterface* find_sock_byId(int pid, int sockfd) final;
 	virtual struct socketInterface* find_sock_byAddr(in_addr_t addr, in_port_t port) final;
@@ -173,6 +174,7 @@ struct socketInterface
 	size_t oppo_window;
 	std::list<struct packetData *> *receiver_buffer;
 	size_t receiver_unused;
+	int seqnum_recentRead;
 };
 
 }
