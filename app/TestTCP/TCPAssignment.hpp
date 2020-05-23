@@ -41,7 +41,7 @@ private:
 	virtual int syscall_write(UUID syscallUUID, int pid, int sockfd, const void *buf, size_t count) final;
 
 	virtual bool is_overlapped(struct sockaddr_in *my_addr) final;
-	virtual void send_packet(struct socketInterface *sender, unsigned char flag, struct packetData *data, int acknum) final;
+	virtual void send_packet(struct socketInterface *sender, unsigned char flag, struct packetData *data) final;
 	virtual int make_DuplSocket(struct socketInterface *listener, in_addr_t oppo_addr, in_port_t oppo_port, in_addr_t my_addr, in_port_t my_port) final;
 	virtual void remove_socket(struct socketInterface *socket) final;
 	virtual size_t read_buffer(struct socketInterface *receiver, void *buf, size_t count) final;
@@ -166,7 +166,7 @@ struct socketInterface
 	int curr_backlog;
 	int parent_sockfd;
 
-	UUID close_timer;
+	UUID timer;
 
 	// internal sender buffer
 	std::list<struct packetData *> *sender_buffer;
