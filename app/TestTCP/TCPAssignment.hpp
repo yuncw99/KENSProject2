@@ -56,6 +56,7 @@ private:
 	virtual struct acceptSyscallArgs* find_acceptSyscall_byId(int pid, int parentfd) final;
 	virtual struct dataSyscallArgs* find_dataSyscall_byUUID(UUID syscallUUID) final;
 	virtual void push_packet_sortbySeqnum(std::list<struct packetData *> *buffer, struct packetData *data) final;
+	virtual void delete_senderBuffer_front(struct socketInterface *socket) final;
 
 public:
 	TCPAssignment(Host* host);
@@ -171,7 +172,7 @@ struct socketInterface
 	// internal sender buffer
 	std::list<struct packetData *> *sender_buffer;
 	size_t sender_unused;
-	size_t oppo_window;
+	unsigned short oppo_window;
 	std::list<struct packetData *> *receiver_buffer;
 	size_t receiver_unused;
 	int seqnum_recentRead;
