@@ -221,7 +221,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		if(flag == FLAG_SYNACK) {
 			if(temp->timer != (UUID)-1)
 				cancelTimer(temp->timer);
-			delete_senderBuffer_front(temp);
+			deleteFront_senderBuffer(temp);
 
 			temp->seqnum = oppo_ack;
 			temp->acknum = htonl(ntohl(oppo_seq) + 1);
@@ -238,7 +238,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		} else if(flag == FLAG_SYN) {
 			if(temp->timer != (UUID)-1)
 				cancelTimer(temp->timer);
-			delete_senderBuffer_front(temp);
+			deleteFront_senderBuffer(temp);
 
 			//temp->seqnum = oppo_ack;
 			temp->acknum = htonl(ntohl(oppo_seq) + 1);
@@ -256,7 +256,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		if(flag == FLAG_ACK) {
 			if(temp->timer != (UUID)-1)
 				cancelTimer(temp->timer);
-			delete_senderBuffer_front(temp);
+			deleteFront_senderBuffer(temp);
 
 			//temp->seqnum = oppo_ack;
 			temp->acknum = oppo_seq;
@@ -280,7 +280,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		} else if(flag == FLAG_SYNACK) {
 			if(temp->timer != (UUID)-1)
 				cancelTimer(temp->timer);
-			delete_senderBuffer_front(temp);
+			deleteFront_senderBuffer(temp);
 
 			//temp->seqnum = oppo_ack;
 			temp->acknum = htonl(ntohl(oppo_seq) + 1);
@@ -315,7 +315,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				// if proper packet is received.
 				if(htonl(ntohl(packet_data->start_num) + packet_data->size) == oppo_ack) {
 					//printf("proper packet! : %d\n", ntohl(oppo_ack));
-					delete_senderBuffer_front(temp);
+					deleteFront_senderBuffer(temp);
 				}
 			}
 
@@ -355,6 +355,23 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 			temp->state = TCP_TIMED_WAIT;
 			temp->timer = addTimer(temp, 120 * 1000 * 1000);
+		} else if(flag== FLAG_FINACK) {
+			if(temp->timer != (UUID)-1)
+				cancelTimer(temp->timer);
+
+			//temp->seqnum = oppo_ack;
+			temp->acknum = htonl(ntohl(oppo_seq) + 1);
+
+			send_packet(temp, FLAG_ACK, NULL);
+		}
+
+	// if FINACK retransmitted from opponent
+	} else if(temp->state == TCP_CLOSE_WAIT) {
+		if(flag == FLAG_FINACK) {
+			if(temp->timer != (UUID)-1)
+				cancelTimer(temp->timer);
+
+			send_packet(temp, FLAG_ACK, NULL);
 		}
 
 	// receiving second ACK from server
@@ -373,15 +390,28 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			remove_socket(temp);
 
 			returnSystemCall(returnUUID, 0);
+
+		// if FINACK retransmitted from opponent
+		} else if(flag == FLAG_FINACK) {
+			if(temp->timer != (UUID)-1)
+				cancelTimer(temp->timer);
+
+			temp->acknum = htonl(ntohl(oppo_seq) + 1);
+
+			send_packet(temp, FLAG_ACK, NULL);
 		}
 
 	// data transfer, and first FINACK
 	} else if(temp->state == TCP_ESTAB) {
-		// receiving first FINACK
-		if(flag == FLAG_FINACK) {
+		// opponent retransmit SYNACK
+		if(flag == FLAG_SYNACK) {
 			if(temp->timer != (UUID)-1)
 				cancelTimer(temp->timer);
 
+			send_packet(temp, FLAG_ACK, NULL);
+
+		// receiving first FINACK
+		} else if(flag == FLAG_FINACK) {
 			//printf("received FINACK!\n");
 			//temp->seqnum = oppo_ack;
 			temp->acknum = htonl(ntohl(oppo_seq) + 1);
@@ -449,7 +479,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				// if proper packet is received.
 				if(htonl(ntohl(packet_data->start_num) + packet_data->size) == oppo_ack) {
 					//printf("proper packet! : %d\n", ntohl(oppo_ack));
-					delete_senderBuffer_front(temp);
+					deleteFront_senderBuffer(temp);
 
 					// if write() already called
 					if(temp->write_syscallUUID != (UUID)-1) {
@@ -489,10 +519,23 @@ void TCPAssignment::timerCallback(void* payload)
 	if(timed_socket->state == TCP_SYN_SENT) {
 		packetData = timed_socket->sender_buffer->front();
 		send_packet(timed_socket, FLAG_SYN, packetData);
+
 	// retransmit SYNACK. ACK not received. (3)
 	} else if(timed_socket->state == TCP_SYN_RCVD) {
 		packetData = timed_socket->sender_buffer->front();
 		send_packet(timed_socket, FLAG_SYNACK, packetData);
+
+	} else if(timed_socket->state == TCP_FIN_WAIT1) {
+		packetData = timed_socket->sender_buffer->front();
+		send_packet(timed_socket, FLAG_FINACK, packetData);
+
+	} else if(timed_socket->state == TCP_LAST_ACK) {
+		packetData = timed_socket->sender_buffer->front();
+		send_packet(timed_socket, FLAG_FINACK, packetData);
+
+	} else if(timed_socket->state == TCP_CLOSING) {
+		packetData = timed_socket->sender_buffer->front();
+		send_packet(timed_socket, FLAG_FINACK, packetData);
 	}
 
 	// timed wait to close connections completely. (7)
@@ -546,6 +589,7 @@ int TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int type, int proto
 int TCPAssignment::syscall_close(UUID syscallUUID, int pid, int sockfd)
 {
 	struct socketInterface *temp;
+	struct packetData *packet_data;
 	temp = find_sock_byId(pid, sockfd);
 
 	if(temp == NULL)
@@ -554,7 +598,9 @@ int TCPAssignment::syscall_close(UUID syscallUUID, int pid, int sockfd)
 	// close() syscall. active close and passive close.
 	if(temp->state == TCP_ESTAB) {
 		// send FINACK packet.
-		send_packet(temp, FLAG_FINACK, NULL);
+		packet_data = make_PacketData(NULL, 0, temp->seqnum);
+		temp->sender_buffer->push_back(packet_data);
+		send_packet(temp, FLAG_FINACK, packet_data);
 		temp->state = TCP_FIN_WAIT1;
 
 		// save syscallUUID for receiving SYNACK
@@ -563,7 +609,9 @@ int TCPAssignment::syscall_close(UUID syscallUUID, int pid, int sockfd)
 		return -2;
 	} else if(temp->state == TCP_CLOSE_WAIT || temp->state == TCP_CLOSING) {
 		// send FINACK packet.
-		send_packet(temp, FLAG_FINACK, NULL);
+		packet_data = make_PacketData(NULL, 0, temp->seqnum);
+		temp->sender_buffer->push_back(packet_data);
+		send_packet(temp, FLAG_FINACK, packet_data);
 		temp->state = TCP_LAST_ACK;
 
 		// save syscallUUID for receiving SYNACK
@@ -894,7 +942,7 @@ void TCPAssignment::send_packet(struct socketInterface *sender, unsigned char fl
 	if (data != NULL) {
 		if(flag != FLAG_SYN && flag != FLAG_ACK)
 			sender->seqnum = ntohl(htonl(seqnum) + 1);
-		if(flag == FLAG_ACK && data != NULL)
+		if(flag == FLAG_ACK)
 			sender->seqnum = ntohl(htonl(seqnum) + data->size);
 	}
 
@@ -1106,6 +1154,37 @@ void TCPAssignment::set_acknumForPacket(struct socketInterface *receiver)
 	return;
 }
 
+void TCPAssignment::push_packet_sortbySeqnum(std::list<struct packetData *> *buffer, struct packetData *data)
+{
+	std::list<struct packetData*>::iterator iter;
+
+	for(iter = buffer->begin(); iter != buffer->end(); iter++) {
+		if((*iter)->start_num >= data->start_num) {
+			buffer->insert(iter, data);
+			return;
+		}
+	}
+
+	buffer->push_back(data);
+	return;
+}
+
+void TCPAssignment::deleteFront_senderBuffer(struct socketInterface *socket)
+{
+	struct packetData *packet_data;
+
+	if(socket->sender_buffer->empty())
+		return;
+
+	packet_data = socket->sender_buffer->front();
+	socket->sender_unused += packet_data->size;
+	socket->sender_buffer->pop_front();
+
+	free(packet_data->data);
+	delete packet_data;
+	return;
+}
+
 
 
 struct socketInterface* TCPAssignment::find_sock_byId(int pid, int sockfd)
@@ -1180,37 +1259,6 @@ struct dataSyscallArgs* TCPAssignment::find_dataSyscall_byUUID(UUID syscallUUID)
 	}
 
 	return NULL;
-}
-
-void TCPAssignment::push_packet_sortbySeqnum(std::list<struct packetData *> *buffer, struct packetData *data)
-{
-	std::list<struct packetData*>::iterator iter;
-
-	for(iter = buffer->begin(); iter != buffer->end(); iter++) {
-		if((*iter)->start_num >= data->start_num) {
-			buffer->insert(iter, data);
-			return;
-		}
-	}
-
-	buffer->push_back(data);
-	return;
-}
-
-void TCPAssignment::delete_senderBuffer_front(struct socketInterface *socket)
-{
-	struct packetData *packet_data;
-
-	if(socket->sender_buffer->empty())
-		return;
-
-	packet_data = socket->sender_buffer->front();
-	socket->sender_unused += packet_data->size;
-	socket->sender_buffer->pop_front();
-
-	free(packet_data->data);
-	delete packet_data;
-	return;
 }
 
 }
