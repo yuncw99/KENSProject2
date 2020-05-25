@@ -158,7 +158,6 @@ struct socketInterface
 	// for blocking syscall
 	UUID conn_syscallUUID;
 	UUID accept_syscallUUID;
-	UUID close_syscallUUID;
 	UUID read_syscallUUID;
 	UUID write_syscallUUID;
 
