@@ -46,10 +46,10 @@ private:
 	virtual void remove_socket(struct socketInterface *socket) final;
 	virtual size_t read_buffer(struct socketInterface *receiver, void *buf, size_t count) final;
 	virtual size_t write_buffer(struct socketInterface *sender, void *buf, size_t count) final;
-	virtual struct packetData* make_PacketData(void* data, size_t size, int start_num) final;
+	virtual struct packetData* make_PacketData(void* data, size_t size, int start_num, int flag) final;
 	virtual void set_acknumForPacket(struct socketInterface *receiver) final;
 	virtual void push_packet_sortbySeqnum(std::list<struct packetData *> *buffer, struct packetData *data) final;
-	virtual void deleteFront_senderBuffer(struct socketInterface *socket) final;
+	virtual void deleteBeforeAcknum_senderBuffer(struct socketInterface *socket, int oppo_ack) final;
 
 	virtual struct socketInterface* find_sock_byId(int pid, int sockfd) final;
 	virtual struct socketInterface* find_sock_byAddr(in_addr_t addr, in_port_t port) final;
@@ -132,6 +132,7 @@ struct packetData
 	size_t size;
 	int start_num;
 	size_t now;
+	int flag;
 };
 
 struct socketInterface
