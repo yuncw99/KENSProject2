@@ -333,7 +333,8 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 				temp->state = TCP_ESTAB;
 				parent_sock = find_sock_byId(temp->pid, temp->parent_sockfd);
-				parent_sock->curr_backlog -= 1;
+				if(parent_sock != NULL)
+					parent_sock->curr_backlog -= 1;
 				//printf("ack! backlog : %d, syscallID : %d\n", parent_sock->curr_backlog, temp->accept_syscallUUID);
 				//printf("myaddr : %x, myport : %d, oppoaddr : %x, oppoport : %d\n", temp->myaddr->sin_addr.s_addr, temp->myaddr->sin_port, temp->oppoaddr->sin_addr.s_addr, temp->oppoaddr->sin_port);
 
