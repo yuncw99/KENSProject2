@@ -49,7 +49,8 @@ private:
 	virtual struct packetData* make_PacketData(void* data, size_t size, int start_num, int flag) final;
 	virtual void set_acknumForPacket(struct socketInterface *receiver) final;
 	virtual void push_packet_sortbySeqnum(std::list<struct packetData *> *buffer, struct packetData *data) final;
-	virtual void deleteBeforeAcknum_senderBuffer(struct socketInterface *socket, int oppo_ack) final;
+	virtual bool deleteBeforeAcknum_senderBuffer(struct socketInterface *socket, int oppo_ack) final;
+	virtual struct timerArgs* make_TimerArgs(struct socketInterface *socket, struct packetData *data) final;
 
 	virtual struct socketInterface* find_sock_byId(int pid, int sockfd) final;
 	virtual struct socketInterface* find_sock_byAddr(in_addr_t addr, in_port_t port) final;
@@ -133,6 +134,15 @@ struct packetData
 	int start_num;
 	size_t now;
 	int flag;
+
+	UUID timer;
+	struct timerArgs *timer_args;
+};
+
+struct timerArgs
+{
+	struct socketInterface *socket;
+	struct packetData *packet;
 };
 
 struct socketInterface
@@ -167,7 +177,7 @@ struct socketInterface
 	int curr_backlog;
 	int parent_sockfd;
 
-	UUID timer;
+	UUID timed_wait_timer;
 
 	// internal sender buffer
 	std::list<struct packetData *> *sender_buffer;
