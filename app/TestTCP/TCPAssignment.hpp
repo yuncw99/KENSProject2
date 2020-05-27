@@ -51,6 +51,7 @@ private:
 	virtual void push_packet_sortbySeqnum(std::list<struct packetData *> *buffer, struct packetData *data) final;
 	virtual bool deleteBeforeAcknum_senderBuffer(struct socketInterface *socket, int oppo_ack) final;
 	virtual struct timerArgs* make_TimerArgs(struct socketInterface *socket, struct packetData *data) final;
+	virtual void direct_retransmit(struct socketInterface *socket, int window_size) final;
 
 	virtual struct socketInterface* find_sock_byId(int pid, int sockfd) final;
 	virtual struct socketInterface* find_sock_byAddr(in_addr_t addr, in_port_t port) final;
@@ -186,6 +187,11 @@ struct socketInterface
 	std::list<struct packetData *> *receiver_buffer;
 	size_t receiver_unused;
 	int seqnum_recentRead;
+
+	int sender_buffer_last;
+	int dupl_num;
+	int sender_recentack;
+	bool sender_ackchange;
 };
 
 }

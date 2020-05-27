@@ -155,7 +155,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 	// if checksum is not valid, just ignore the packet.
 	if(packet_checksum != calc_checksum) {
-		printf("not valid checksum!\n");
+		//printf("not valid checksum!\n");
 		return;
 	}
 
@@ -181,7 +181,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	//printf("packet Arrived. flag : %x, state : %d\n", flag, temp->state);
 	// on receiving SYN
 	if(flag == FLAG_SYN) {
-		printf("packet Arrived. flag : SYN, state : %d\n", temp->state);
+		//printf("packet Arrived. flag : SYN, state : %d\n", temp->state);
 		// passive
 		if(temp->state == TCP_LISTEN) {
 			if(temp->curr_backlog < temp->max_backlog) {
@@ -234,7 +234,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		}
 
 	} else if(flag == FLAG_SYNACK) {
-		printf("packet Arrived. flag : SYNACK, state : %d\n", temp->state);
+		//printf("packet Arrived. flag : SYNACK, state : %d\n", temp->state);
 
 		// on receiving SYNACK properly. active
 		if(temp->state == TCP_SYN_SENT) {
@@ -294,7 +294,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		}
 
 	} else if(flag == FLAG_FINACK) {
-		printf("packet Arrived. flag : FINACK, state : %d\n", temp->state);
+		//printf("packet Arrived. flag : FINACK, state : %d\n", temp->state);
 
 		if(temp->state == TCP_LAST_ACK) {
 			temp->acknum = oppo_seq;
@@ -375,7 +375,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		}
 
 	} else if(flag == FLAG_ACK) {
-		printf("packet Arrived. flag : ACK, state : %d\n", temp->state);
+		//printf("packet Arrived. flag : ACK, state : %d\n", temp->state);
 
 		// handling connect server state
 		// on receiving ACK properly. passive
@@ -478,6 +478,23 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			
 			// if ACK of data is received.
 			} else {
+				if(temp->sender_recentack == oppo_ack) {
+					temp->dupl_num += 1;
+				} else {
+					temp->dupl_num = 0;
+					temp->sender_recentack = oppo_ack;
+				}
+
+				printf("ACK received. oppo_ack : %d\n", ntohl(oppo_ack));
+				if(temp->dupl_num == 3 && temp->sender_ackchange == false) {
+					printf("sender_buffer_last : %d\n", ntohl(temp->sender_buffer_last));
+					direct_retransmit(temp, 51200 - (ntohl(temp->sender_buffer_last) - ntohl(oppo_ack)));
+					temp->sender_ackchange = true;
+				} else if(temp->dupl_num == 3 && temp->sender_ackchange == true) {
+					temp->dupl_num = 0;
+					temp->sender_ackchange = false;
+				}
+				
 				if(temp->sender_buffer->empty()) {
 					temp->acknum = oppo_seq;
 					return;
@@ -491,17 +508,20 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				if(temp->write_syscallUUID != (UUID)-1) {
 					dataSyscallArgs = find_dataSyscall_byUUID(temp->write_syscallUUID);
 					
-					if(temp->sender_unused < dataSyscallArgs->count) {
-						saved_data_len = write_buffer(temp, dataSyscallArgs->buf, temp->sender_unused);
-					} else {
-						saved_data_len = write_buffer(temp, dataSyscallArgs->buf, dataSyscallArgs->count);
-					}
-					dataUUID_list.remove(dataSyscallArgs);
-					free(dataSyscallArgs);
+					if(temp->sender_unused == 51200) {
+						if(temp->sender_unused < dataSyscallArgs->count) {
+							saved_data_len = write_buffer(temp, dataSyscallArgs->buf, temp->sender_unused);
+						} else {
+							saved_data_len = write_buffer(temp, dataSyscallArgs->buf, dataSyscallArgs->count);
+						}
+					
+						dataUUID_list.remove(dataSyscallArgs);
+						free(dataSyscallArgs);
 
-					returnUUID = temp->write_syscallUUID;
-					temp->write_syscallUUID = -1;
-					returnSystemCall(returnUUID, saved_data_len);
+						returnUUID = temp->write_syscallUUID;
+						temp->write_syscallUUID = -1;
+						returnSystemCall(returnUUID, saved_data_len);
+					}
 				}
 			}
 		}
@@ -516,7 +536,7 @@ void TCPAssignment::timerCallback(void* payload)
 	struct socketInterface *timed_socket = timer_args->socket;
 	struct packetData *packetData;
 
-	printf("timer! state : %d\n", timed_socket->state);
+	//printf("timer! state : %d\n", timed_socket->state);
 	if(timer_args->packet == NULL) {
 		cancelTimer(timed_socket->timed_wait_timer);
 		timed_socket->timed_wait_timer = -1;
@@ -527,6 +547,7 @@ void TCPAssignment::timerCallback(void* payload)
 		}
 	} else {
 		packetData = timer_args->packet;
+		printf("retransmission. %d\n", ntohl(packetData->start_num));
 		send_packet(timed_socket, packetData->flag, packetData);
 	}
 }
@@ -563,6 +584,11 @@ int TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int type, int proto
 	new_sock->sender_buffer = new std::list<struct packetData*>();
 	new_sock->receiver_buffer = new std::list<struct packetData*>();
 	new_sock->seqnum_recentRead = 0;
+
+	new_sock->sender_buffer_last = htonl(1);
+	new_sock->dupl_num = 0;
+	new_sock->sender_recentack = -1;
+	new_sock->sender_ackchange = false;
 
 	socket_list.push_back(new_sock);
 	return sockfd;
@@ -884,6 +910,7 @@ void TCPAssignment::send_packet(struct socketInterface *sender, unsigned char fl
 		tcp_packet_len = PACKETH_SIZE - IH_SIZE + data->size;
 		seqnum = data->start_num;
 	}
+	printf("send packet %d\n", ntohl(seqnum));
 
 	in_addr_t src_ip = sender->myaddr->sin_addr.s_addr;
 	in_addr_t dest_ip = sender->oppoaddr->sin_addr.s_addr;
@@ -925,6 +952,7 @@ void TCPAssignment::send_packet(struct socketInterface *sender, unsigned char fl
 			sender->seqnum = ntohl(htonl(seqnum) + data->size);
 	}
 
+	/*
 	if(flag == FLAG_SYN) {
 		printf("packet Sent. flag : SYN\n");
 	} else if(flag == FLAG_SYNACK) {
@@ -934,6 +962,7 @@ void TCPAssignment::send_packet(struct socketInterface *sender, unsigned char fl
 	} else if(flag == FLAG_ACK) {
 		printf("packet Sent. flag : ACK\n");
 	}
+	*/
 
 	if(flag == FLAG_ACK && data == NULL)
 		return;
@@ -979,6 +1008,11 @@ int TCPAssignment::make_DuplSocket(struct socketInterface *listener, in_addr_t o
 	dupl_sock->sender_buffer = new std::list<struct packetData*>();
 	dupl_sock->receiver_buffer = new std::list<struct packetData*>();
 	dupl_sock->seqnum_recentRead = 0;
+
+	dupl_sock->sender_buffer_last = htonl(1);
+	dupl_sock->dupl_num = 0;
+	dupl_sock->sender_recentack = -1;
+	dupl_sock->sender_ackchange = false;
 
 	// change listener myaddr information. 0 to real addr.
 	listener->myaddr->sin_addr.s_addr = my_addr;
@@ -1107,10 +1141,14 @@ size_t TCPAssignment::write_buffer(struct socketInterface *sender, void *buf, si
 		temp_data = malloc(packet_size);
 		memcpy(temp_data, (char*)buf + saved_data_len, packet_size);
 
-		packet_data = make_PacketData(temp_data, packet_size, sender->seqnum, FLAG_ACK);
+		//sender->seqnum = ntohl(htonl(sender->sender_buffer_last) + packet_size);
+		printf("seqnum : %d, buffer_last : %d\n", ntohl(sender->seqnum), ntohl(sender->sender_buffer_last));
+		packet_data = make_PacketData(temp_data, packet_size, sender->sender_buffer_last, FLAG_ACK);
 
 		sender->sender_buffer->push_back(packet_data);
 		sender->sender_unused -= packet_data->size;
+		//sender->sender_buffer_last += packet_data->size;
+		sender->sender_buffer_last = ntohl(htonl(sender->sender_buffer_last) + packet_data->size);
 		saved_data_len += packet_data->size;
 
 		send_packet(sender, FLAG_ACK, packet_data);
@@ -1179,10 +1217,10 @@ bool TCPAssignment::deleteBeforeAcknum_senderBuffer(struct socketInterface *sock
 		temp_packetnum = ntohl(packet_data->start_num) + packet_data->size + 1;
 	}
 
-	printf("delete start. temp packetnum : %d, oppo ack : %d\n", temp_packetnum, ntohl(oppo_ack));
+	//printf("delete start. temp packetnum : %d, oppo ack : %d\n", temp_packetnum, ntohl(oppo_ack));
 	// if proper packet is received.
 	while(temp_packetnum <= ntohl(oppo_ack)) {
-		printf("delete. temp packetnum : %d, oppo ack : %d\n", temp_packetnum, ntohl(oppo_ack));
+		//printf("delete. temp packetnum : %d, oppo ack : %d\n", temp_packetnum, ntohl(oppo_ack));
 		socket->sender_unused += packet_data->size;
 		socket->sender_buffer->pop_front();
 		
@@ -1222,6 +1260,25 @@ struct timerArgs* TCPAssignment::make_TimerArgs(struct socketInterface *socket, 
 		packet->timer_args = timer_args;
 
 	return timer_args;
+}
+
+void TCPAssignment::direct_retransmit(struct socketInterface *socket, int window_size)
+{
+	std::list<struct packetData*>::iterator iter;
+	int count = 0;
+
+	printf("window size : %d\n", window_size);
+	for(iter = socket->sender_buffer->begin(); iter != socket->sender_buffer->end(); iter++) {
+		if(count <= window_size) {
+			printf("direct retransmit : %d\n", ntohl((*iter)->start_num));
+			send_packet(socket, FLAG_ACK, (*iter));
+			count += (*iter)->size;
+		} else {
+			cancelTimer((*iter)->timer);
+		}
+	}
+
+	return;
 }
 
 
