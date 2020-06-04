@@ -47,7 +47,6 @@ private:
 	virtual size_t read_buffer(struct socketInterface *receiver, void *buf, size_t count) final;
 	virtual size_t write_buffer(struct socketInterface *sender, void *buf, size_t count) final;
 	virtual struct packetData* make_PacketData(void* data, size_t size, int start_num, int flag) final;
-	virtual void set_acknumForPacket(struct socketInterface *receiver) final;
 	virtual void push_packet_sortbySeqnum(std::list<struct packetData *> *buffer, struct packetData *data) final;
 	virtual bool deleteBeforeAcknum_senderBuffer(struct socketInterface *socket, int oppo_ack) final;
 	virtual struct timerArgs* make_TimerArgs(struct socketInterface *socket, struct packetData *data) final;
@@ -186,7 +185,6 @@ struct socketInterface
 	unsigned short oppo_window;
 	std::list<struct packetData *> *receiver_buffer;
 	size_t receiver_unused;
-	int seqnum_recentRead;
 
 	int sender_buffer_last;
 	int dupl_num;
