@@ -108,6 +108,7 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 	}
 }
 
+// moving
 void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 {
 	struct socketInterface *temp;
@@ -238,6 +239,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 		// on receiving SYNACK properly. active
 		if(temp->state == TCP_SYN_SENT) {
+			// don't use deleteBeforeAcknum because of simultaneous connect.
 			//deleteBeforeAcknum_senderBuffer(temp, oppo_ack);
 			packet_data = temp->sender_buffer->front();
 			temp->sender_unused += packet_data->size;
@@ -261,9 +263,13 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			returnSystemCall(returnUUID, 0);
 
 			temp->state = TCP_ESTAB;
+
+			timer_args = make_TimerArgs(temp, NULL, TIMER_SOCKET);
+			temp->congestion_timer = addTimer(timer_args, 120 * 1000 * 1000);
 
 		// on duplicate connect. active
 		} else if(temp->state == TCP_SYN_RCVD) {
+			// don't use deleteBeforeAcknum because of simultaneous connect.
 			//deleteBeforeAcknum_senderBuffer(temp, oppo_ack);
 			packet_data = temp->sender_buffer->front();
 			temp->sender_unused += packet_data->size;
@@ -287,6 +293,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			returnSystemCall(returnUUID, 0);
 
 			temp->state = TCP_ESTAB;
+
+			timer_args = make_TimerArgs(temp, NULL, TIMER_SOCKET);
+			temp->congestion_timer = addTimer(timer_args, 120 * 1000 * 1000);
 
 		} else {
 			temp->acknum = htonl(ntohl(oppo_seq) + 1);
@@ -307,7 +316,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		} else if(temp->state == TCP_FIN_WAIT2) {
 			temp->acknum = htonl(ntohl(oppo_seq) + 1);
 			temp->state = TCP_TIMED_WAIT;
-			timer_args = make_TimerArgs(temp, NULL);
+			timer_args = make_TimerArgs(temp, NULL, TIMER_WAIT);
 			temp->timed_wait_timer = addTimer(timer_args, 120 * 1000 * 1000);
 
 			send_packet(temp, FLAG_ACK, NULL);
@@ -328,6 +337,10 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				}
 
 				temp->state = TCP_ESTAB;
+
+				timer_args = make_TimerArgs(temp, NULL, TIMER_SOCKET);
+				temp->congestion_timer = addTimer(timer_args, 120 * 1000 * 1000);
+
 				parent_sock = find_sock_byId(temp->pid, temp->parent_sockfd);
 				if(parent_sock != NULL)
 					parent_sock->curr_backlog -= 1;
@@ -404,6 +417,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			}
 
 			temp->state = TCP_ESTAB;
+			timer_args = make_TimerArgs(temp, NULL, TIMER_SOCKET);
+			temp->congestion_timer = addTimer(timer_args, 120 * 1000 * 1000);
+
 			parent_sock = find_sock_byId(temp->pid, temp->parent_sockfd);
 			if (parent_sock != NULL)
 				parent_sock->curr_backlog -= 1;
@@ -438,7 +454,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			temp->acknum = oppo_seq;
 
 			temp->state = TCP_TIMED_WAIT;
-			timer_args = make_TimerArgs(temp, NULL);
+			timer_args = make_TimerArgs(temp, NULL, TIMER_WAIT);
 			temp->timed_wait_timer = addTimer(timer_args, 120 * 1000 * 1000);
 
 		// receiving second ACK from server
@@ -543,6 +559,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	return;
 }
 
+// moving
 void TCPAssignment::timerCallback(void* payload)
 {
 	struct timerArgs *timer_args = (struct timerArgs *) payload;
@@ -550,7 +567,7 @@ void TCPAssignment::timerCallback(void* payload)
 	struct packetData *packetData;
 
 	//printf("timer! state : %d\n", timed_socket->state);
-	if(timer_args->packet == NULL) {
+	if(timer_args->flag == TIMER_WAIT) {
 		cancelTimer(timed_socket->timed_wait_timer);
 		timed_socket->timed_wait_timer = -1;
 		// timed wait to close connections completely. (7)
@@ -558,10 +575,14 @@ void TCPAssignment::timerCallback(void* payload)
 			timed_socket->state = TCP_CLOSED;
 			remove_socket(timed_socket);
 		}
-	} else {
+	} else if(timer_args->flag == TIMER_PACKET) {
 		packetData = timer_args->packet;
 		//printf("retransmission. %d\n", ntohl(packetData->start_num));
 		send_packet(timed_socket, packetData->flag, packetData);
+	} else if(timer_args->flag == TIMER_SOCKET) {
+		cancelTimer(timed_socket->congestion_timer);
+		timed_socket->congestion_timer = addTimer(timer_args, 120 * 1000 * 1000);
+		//printf("timer socket!\n");
 	}
 }
 
@@ -589,10 +610,15 @@ int TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int type, int proto
 	new_sock->parent_sockfd = -1;
 
 	new_sock->sender_unused = 51200;
+	new_sock->my_window = MSS;
 	new_sock->receiver_unused = 51200;
 	new_sock->oppo_window = 0;
 
+	new_sock->ssthresh = 512 * MSS;
+	new_sock->con_state = SLOW_START;
+
 	new_sock->timed_wait_timer = -1;
+	new_sock->congestion_timer = -1;
 
 	new_sock->sender_buffer = new std::list<struct packetData*>();
 	new_sock->receiver_buffer = new std::list<struct packetData*>();
@@ -822,6 +848,7 @@ int TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int sockfd, struct 
 	return child_sock->sockfd;
 }
 
+// moving
 int TCPAssignment::syscall_read(UUID syscallUUID, int pid, int sockfd, void *buf, size_t count)
 {
 	struct socketInterface *temp;
@@ -903,6 +930,7 @@ bool TCPAssignment::is_overlapped(struct sockaddr_in *my_addr)
 	return false;
 }
 
+// moving
 void TCPAssignment::send_packet(struct socketInterface *sender, unsigned char flag, struct packetData *data)
 {
 	Packet *myPacket;
@@ -982,7 +1010,7 @@ void TCPAssignment::send_packet(struct socketInterface *sender, unsigned char fl
 		cancelTimer(data->timer);
 		data->timer = addTimer(data->timer_args, 120 * 1000 * 1000);
 	} else {
-		timer_args = make_TimerArgs(sender, data);
+		timer_args = make_TimerArgs(sender, data, TIMER_PACKET);
 		data->timer = addTimer(timer_args, 120 * 1000 * 1000);
 	}
 
@@ -1010,10 +1038,15 @@ int TCPAssignment::make_DuplSocket(struct socketInterface *listener, in_addr_t o
 	dupl_sock->parent_sockfd = -1;
 
 	dupl_sock->sender_unused = 51200;
+	dupl_sock->my_window = MSS;
 	dupl_sock->receiver_unused = 51200;
 	dupl_sock->oppo_window = 0;
 
+	dupl_sock->ssthresh = 512 * MSS;
+	dupl_sock->con_state = SLOW_START;
+
 	dupl_sock->timed_wait_timer = -1;
+	dupl_sock->congestion_timer = -1;
 
 	dupl_sock->sender_buffer = new std::list<struct packetData*>();
 	dupl_sock->receiver_buffer = new std::list<struct packetData*>();
@@ -1078,11 +1111,13 @@ void TCPAssignment::remove_socket(struct socketInterface *socket)
 
 	acceptUUID_list.remove(find_acceptSyscall_byId(socket->pid, socket->sockfd));
 	dataUUID_list.remove(find_dataSyscall_byUUID(socket->read_syscallUUID));
+	cancelTimer(socket->congestion_timer);
 
 	removeFileDescriptor(socket->pid, socket->sockfd);
 	free(socket);
 }
 
+// moving
 size_t TCPAssignment::read_buffer(struct socketInterface *receiver, void *buf, size_t count)
 {
 	size_t saved_data_len = 0;
@@ -1245,12 +1280,13 @@ bool TCPAssignment::deleteBeforeAcknum_senderBuffer(struct socketInterface *sock
 	return success;
 }
 
-struct timerArgs* TCPAssignment::make_TimerArgs(struct socketInterface *socket, struct packetData *packet)
+struct timerArgs* TCPAssignment::make_TimerArgs(struct socketInterface *socket, struct packetData *packet, int flag)
 {
 	struct timerArgs *timer_args;
 	timer_args = new struct timerArgs();
 	timer_args->socket = socket;
 	timer_args->packet = packet;
+	timer_args->flag = flag;
 
 	if(packet != NULL)
 		packet->timer_args = timer_args;

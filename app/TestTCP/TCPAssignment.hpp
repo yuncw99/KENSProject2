@@ -49,7 +49,7 @@ private:
 	virtual struct packetData* make_PacketData(void* data, size_t size, int start_num, int flag) final;
 	virtual void push_packet_sortbySeqnum(std::list<struct packetData *> *buffer, struct packetData *data) final;
 	virtual bool deleteBeforeAcknum_senderBuffer(struct socketInterface *socket, int oppo_ack) final;
-	virtual struct timerArgs* make_TimerArgs(struct socketInterface *socket, struct packetData *data) final;
+	virtual struct timerArgs* make_TimerArgs(struct socketInterface *socket, struct packetData *data, int flag) final;
 	virtual void direct_retransmit(struct socketInterface *socket, int window_size) final;
 
 	virtual struct socketInterface* find_sock_byId(int pid, int sockfd) final;
@@ -71,6 +71,7 @@ public:
 	const size_t PACKETH_SIZE = 54;
 	const size_t EH_SIZE = 14;
 	const size_t IH_SIZE = 34;
+	const size_t MSS = 512;
 
 protected:
 	virtual void systemCallback(UUID syscallUUID, int pid, const SystemCallParameter& param) final;
@@ -109,6 +110,20 @@ enum Flag
 	FLAG_FINACK = 0x011
 };
 
+enum Congestion_State
+{
+	SLOW_START,
+	CON_AVOID,
+	FAST_RECOVERY
+};
+
+enum Timer_Flag
+{
+	TIMER_PACKET,
+	TIMER_WAIT,
+	TIMER_SOCKET
+};
+
 struct acceptSyscallArgs
 {
 	UUID syscallUUID;
@@ -143,6 +158,7 @@ struct timerArgs
 {
 	struct socketInterface *socket;
 	struct packetData *packet;
+	int flag;
 };
 
 struct socketInterface
@@ -178,18 +194,23 @@ struct socketInterface
 	int parent_sockfd;
 
 	UUID timed_wait_timer;
+	UUID congestion_timer;
 
 	// internal sender buffer
 	std::list<struct packetData *> *sender_buffer;
 	size_t sender_unused;
-	unsigned short oppo_window;
+	size_t my_window;
 	std::list<struct packetData *> *receiver_buffer;
 	size_t receiver_unused;
+	unsigned short oppo_window;
 
 	int sender_buffer_last;
 	int dupl_num;
 	int sender_recentack;
 	bool sender_ackchange;
+
+	size_t ssthresh;
+	int con_state;
 };
 
 }
