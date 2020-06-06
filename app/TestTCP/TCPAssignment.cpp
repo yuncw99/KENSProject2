@@ -57,13 +57,13 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 	case READ:
 		ret = this->syscall_read(syscallUUID, pid, param.param1_int, param.param2_ptr, param.param3_int);
 
-		if (ret != -1)
+		if (ret != -2)
 			returnSystemCall(syscallUUID, ret);
 		break;
 	case WRITE:
 		ret = this->syscall_write(syscallUUID, pid, param.param1_int, param.param2_ptr, param.param3_int);
 
-		if (ret != 0)
+		if (ret != -2)
 			returnSystemCall(syscallUUID, ret);
 		break;
 	case CONNECT:
@@ -265,7 +265,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			temp->state = TCP_ESTAB;
 
 			timer_args = make_TimerArgs(temp, NULL, TIMER_SOCKET);
-			temp->congestion_timer = addTimer(timer_args, 120 * 1000 * 1000);
+			temp->congestion_timer = addTimer(timer_args, 10 * 1000 * 1000);
 
 		// on duplicate connect. active
 		} else if(temp->state == TCP_SYN_RCVD) {
@@ -295,7 +295,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			temp->state = TCP_ESTAB;
 
 			timer_args = make_TimerArgs(temp, NULL, TIMER_SOCKET);
-			temp->congestion_timer = addTimer(timer_args, 120 * 1000 * 1000);
+			temp->congestion_timer = addTimer(timer_args, 10 * 1000 * 1000);
 
 		} else {
 			temp->acknum = htonl(ntohl(oppo_seq) + 1);
@@ -339,7 +339,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				temp->state = TCP_ESTAB;
 
 				timer_args = make_TimerArgs(temp, NULL, TIMER_SOCKET);
-				temp->congestion_timer = addTimer(timer_args, 120 * 1000 * 1000);
+				temp->congestion_timer = addTimer(timer_args, 10 * 1000 * 1000);
 
 				parent_sock = find_sock_byId(temp->pid, temp->parent_sockfd);
 				if(parent_sock != NULL)
@@ -418,7 +418,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 			temp->state = TCP_ESTAB;
 			timer_args = make_TimerArgs(temp, NULL, TIMER_SOCKET);
-			temp->congestion_timer = addTimer(timer_args, 120 * 1000 * 1000);
+			temp->congestion_timer = addTimer(timer_args, 10 * 1000 * 1000);
 
 			parent_sock = find_sock_byId(temp->pid, temp->parent_sockfd);
 			if (parent_sock != NULL)
@@ -502,14 +502,27 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			
 			// if ACK of data is received.
 			} else {
+				//printf("ACK received. state : %d, cwnd max : %d, cwnd using : %d, ssthresh : %d\n", temp->con_state, temp->cwnd_max, temp->cwnd_using, temp->ssthresh);
+				temp->oppo_window = estimate_oppo_window(temp, oppo_ack);
 				if(temp->sender_recentack == oppo_ack) {
 					temp->dupl_num += 1;
+
+					if(temp->con_state == CON_FAST_RECOVERY)
+						temp->cwnd_max += MSS;
+
+					if(temp->dupl_num == 3) {
+						if(temp->con_state == CON_SLOW_START || temp->con_state == CON_AVOID) {
+							temp->ssthresh = temp->cwnd_max / 2;
+							temp->cwnd_max = temp->ssthresh + 3*MSS;
+							temp->con_state = CON_FAST_RECOVERY;
+						}
+					}
 
 					//printf("ACK received. oppo_ack : %d\n", ntohl(oppo_ack));
 					if(temp->sender_ackchange == false) {
 						if(temp->dupl_num == 3) {
 							//printf("sender_buffer_last : %d\n", ntohl(temp->sender_buffer_last));
-							direct_retransmit(temp, 51200 - (ntohl(temp->sender_buffer_last) - ntohl(oppo_ack)));
+							direct_retransmit(temp);
 						}
 					} else {
 						if(temp->dupl_num == 3) {
@@ -525,16 +538,30 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						temp->sender_ackchange = false;
 					}
 
+					if(temp->con_state == CON_SLOW_START) {
+						temp->cwnd_max += MSS;
+					} else if(temp->con_state == CON_AVOID) {
+						temp->cwnd_max += (int)((float)MSS * ((float)MSS/(float)temp->cwnd_max));
+					} else if(temp->con_state == CON_FAST_RECOVERY) {
+						temp->cwnd_max = temp->ssthresh;
+						temp->con_state = CON_AVOID;
+					}
+
 					temp->dupl_num = 0;
 					temp->sender_recentack = oppo_ack;
 				}
+
+				if(temp->con_state == CON_SLOW_START and temp->cwnd_max >= temp->ssthresh)
+					temp->con_state = CON_AVOID;
 				
+				printf("AFTER : ACK received. state : %d, cwnd max : %d, cwnd using : %d, ssthresh : %d\n", temp->con_state, temp->cwnd_max, temp->cwnd_using, temp->ssthresh);
 				temp->acknum = oppo_seq;
 				if(!deleteBeforeAcknum_senderBuffer(temp, oppo_ack))
 					return;
 
 				// if write() already called
 				if(temp->write_syscallUUID != (UUID)-1) {
+					printf("write called\n");
 					dataSyscallArgs = find_dataSyscall_byUUID(temp->write_syscallUUID);
 					
 					if(temp->sender_unused == 51200) {
@@ -576,12 +603,18 @@ void TCPAssignment::timerCallback(void* payload)
 			remove_socket(timed_socket);
 		}
 	} else if(timer_args->flag == TIMER_PACKET) {
+		timed_socket->ssthresh = timed_socket->cwnd_max / 2;
+		timed_socket->cwnd_max = MSS;
+		timed_socket->cwnd_using = 0;
+		timed_socket->con_state = CON_SLOW_START;
+
 		packetData = timer_args->packet;
 		//printf("retransmission. %d\n", ntohl(packetData->start_num));
 		send_packet(timed_socket, packetData->flag, packetData);
 	} else if(timer_args->flag == TIMER_SOCKET) {
 		cancelTimer(timed_socket->congestion_timer);
-		timed_socket->congestion_timer = addTimer(timer_args, 120 * 1000 * 1000);
+		timed_socket->cwnd_using = 0;
+		timed_socket->congestion_timer = addTimer(timer_args, 10 * 1000 * 1000);
 		//printf("timer socket!\n");
 	}
 }
@@ -610,12 +643,13 @@ int TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int type, int proto
 	new_sock->parent_sockfd = -1;
 
 	new_sock->sender_unused = 51200;
-	new_sock->my_window = MSS;
+	new_sock->cwnd_max = MSS;
+	new_sock->cwnd_using = 0;
 	new_sock->receiver_unused = 51200;
 	new_sock->oppo_window = 0;
 
-	new_sock->ssthresh = 512 * MSS;
-	new_sock->con_state = SLOW_START;
+	new_sock->ssthresh = 128 * MSS;
+	new_sock->con_state = CON_SLOW_START;
 
 	new_sock->timed_wait_timer = -1;
 	new_sock->congestion_timer = -1;
@@ -872,7 +906,7 @@ int TCPAssignment::syscall_read(UUID syscallUUID, int pid, int sockfd, void *buf
 
 		temp->read_syscallUUID = syscallUUID;
 		//printf("buffer empty\n");
-		return -1;
+		return -2;
 	}
 
 	//printf("normal read\n");
@@ -884,6 +918,7 @@ int TCPAssignment::syscall_write(UUID syscallUUID, int pid, int sockfd, const vo
 	struct socketInterface *temp;
 	struct dataSyscallArgs *syscallArgs;
 	temp = find_sock_byId(pid, sockfd);
+	size_t result;
 
 	if(temp == NULL)
 		return -1;
@@ -902,13 +937,27 @@ int TCPAssignment::syscall_write(UUID syscallUUID, int pid, int sockfd, const vo
 
 		temp->write_syscallUUID = syscallUUID;
 		//printf("buffer empty\n");
-		return 0;
+		return -2;
 	}
 
+	printf("write called\n");
 	if(temp->sender_unused < count)
-		return write_buffer(temp, (void *)buf, temp->sender_unused);
+		result = write_buffer(temp, (void *)buf, temp->sender_unused);
+	result = write_buffer(temp, (void *)buf, count);
 
-	return write_buffer(temp, (void *)buf, count);
+	if(result == 0) {
+		syscallArgs = (struct dataSyscallArgs *) malloc(sizeof(struct dataSyscallArgs));
+		syscallArgs->syscallUUID = syscallUUID;
+
+		syscallArgs->buf = (void *)buf;
+		syscallArgs->count = count;
+		dataUUID_list.push_back(syscallArgs);
+
+		temp->write_syscallUUID = syscallUUID;
+		return -2;
+	}
+
+	return result;
 }
 
 bool TCPAssignment::is_overlapped(struct sockaddr_in *my_addr)
@@ -988,6 +1037,8 @@ void TCPAssignment::send_packet(struct socketInterface *sender, unsigned char fl
 			sender->seqnum = ntohl(htonl(seqnum) + 1);
 		if(flag == FLAG_ACK)
 			sender->seqnum = ntohl(htonl(seqnum) + data->size);
+
+		sender->cwnd_using += data->size;
 	}
 
 	/*
@@ -1038,12 +1089,13 @@ int TCPAssignment::make_DuplSocket(struct socketInterface *listener, in_addr_t o
 	dupl_sock->parent_sockfd = -1;
 
 	dupl_sock->sender_unused = 51200;
-	dupl_sock->my_window = MSS;
+	dupl_sock->cwnd_max = MSS;
+	dupl_sock->cwnd_using = 0;
 	dupl_sock->receiver_unused = 51200;
 	dupl_sock->oppo_window = 0;
 
-	dupl_sock->ssthresh = 512 * MSS;
-	dupl_sock->con_state = SLOW_START;
+	dupl_sock->ssthresh = 128 * MSS;
+	dupl_sock->con_state = CON_SLOW_START;
 
 	dupl_sock->timed_wait_timer = -1;
 	dupl_sock->congestion_timer = -1;
@@ -1174,7 +1226,7 @@ size_t TCPAssignment::write_buffer(struct socketInterface *sender, void *buf, si
 	size_t temp_size, packet_size;
 	struct packetData *packet_data;
 	void *temp_data;
-
+	sender->oppo_window = estimate_oppo_window(sender, sender->sender_recentack);
 	// if opponent receiver window size is smaller than count
 	if(sender->oppo_window < count) {
 		temp_size = sender->oppo_window;
@@ -1182,7 +1234,15 @@ size_t TCPAssignment::write_buffer(struct socketInterface *sender, void *buf, si
 		temp_size = count;
 	}
 
+	/*
+	if((sender->cwnd_max - sender->cwnd_using) < temp_size)
+		temp_size = (sender->cwnd_max - sender->cwnd_using);
+	if((sender->cwnd_max - sender->cwnd_using) < MSS)
+		temp_size = 0;
+	*/
+
 	while(saved_data_len < temp_size) {
+		printf("window : %d, cwnd max : %d, cwnd using : %d\n", sender->oppo_window, sender->cwnd_max, sender->cwnd_using);
 		// chunk packet to 512 bytes
 		if((temp_size - saved_data_len) > 512) {
 			packet_size = 512;
@@ -1206,6 +1266,7 @@ size_t TCPAssignment::write_buffer(struct socketInterface *sender, void *buf, si
 		send_packet(sender, FLAG_ACK, packet_data);
 	}
 
+	printf("saved : %d\n", saved_data_len);
 	return saved_data_len;
 }
 
@@ -1294,14 +1355,14 @@ struct timerArgs* TCPAssignment::make_TimerArgs(struct socketInterface *socket, 
 	return timer_args;
 }
 
-void TCPAssignment::direct_retransmit(struct socketInterface *socket, int window_size)
+void TCPAssignment::direct_retransmit(struct socketInterface *socket)
 {
 	std::list<struct packetData*>::iterator iter;
 	int count = 0;
 
 	//printf("window size : %d\n", window_size);
 	for(iter = socket->sender_buffer->begin(); iter != socket->sender_buffer->end(); iter++) {
-		if(count <= window_size) {
+		if(count <= socket->oppo_window && count <= (socket->cwnd_max - socket->cwnd_using)) {
 			//printf("direct retransmit : %d\n", ntohl((*iter)->start_num));
 			send_packet(socket, FLAG_ACK, (*iter));
 			count += (*iter)->size;
@@ -1387,6 +1448,14 @@ struct dataSyscallArgs* TCPAssignment::find_dataSyscall_byUUID(UUID syscallUUID)
 	}
 
 	return NULL;
+}
+
+unsigned short TCPAssignment::estimate_oppo_window(struct socketInterface *socket, int oppo_ack)
+{
+	if(ntohl(oppo_ack) == -1)
+		oppo_ack = htonl(1);
+	printf("estimate : %d, %d\n", ntohl(socket->sender_buffer_last), ntohl(oppo_ack));
+	return 51200 - (ntohl(socket->sender_buffer_last) - ntohl(oppo_ack));
 }
 
 }

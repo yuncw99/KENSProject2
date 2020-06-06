@@ -50,7 +50,7 @@ private:
 	virtual void push_packet_sortbySeqnum(std::list<struct packetData *> *buffer, struct packetData *data) final;
 	virtual bool deleteBeforeAcknum_senderBuffer(struct socketInterface *socket, int oppo_ack) final;
 	virtual struct timerArgs* make_TimerArgs(struct socketInterface *socket, struct packetData *data, int flag) final;
-	virtual void direct_retransmit(struct socketInterface *socket, int window_size) final;
+	virtual void direct_retransmit(struct socketInterface *socket) final;
 
 	virtual struct socketInterface* find_sock_byId(int pid, int sockfd) final;
 	virtual struct socketInterface* find_sock_byAddr(in_addr_t addr, in_port_t port) final;
@@ -58,6 +58,7 @@ private:
 	virtual struct socketInterface* find_childsock_byId(int pid, int parentfd) final;
 	virtual struct acceptSyscallArgs* find_acceptSyscall_byId(int pid, int parentfd) final;
 	virtual struct dataSyscallArgs* find_dataSyscall_byUUID(UUID syscallUUID) final;
+	virtual unsigned short estimate_oppo_window(struct socketInterface *socket, int oppo_ack) final;
 
 public:
 	TCPAssignment(Host* host);
@@ -112,9 +113,9 @@ enum Flag
 
 enum Congestion_State
 {
-	SLOW_START,
+	CON_SLOW_START,
 	CON_AVOID,
-	FAST_RECOVERY
+	CON_FAST_RECOVERY
 };
 
 enum Timer_Flag
@@ -199,7 +200,8 @@ struct socketInterface
 	// internal sender buffer
 	std::list<struct packetData *> *sender_buffer;
 	size_t sender_unused;
-	size_t my_window;
+	size_t cwnd_max;
+	size_t cwnd_using;
 	std::list<struct packetData *> *receiver_buffer;
 	size_t receiver_unused;
 	unsigned short oppo_window;
