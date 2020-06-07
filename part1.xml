@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites tests="8" failures="0" disabled="0" errors="0" timestamp="2020-06-07T17:26:19" time="9.488" name="AllTests">
-  <testsuite name="TestEnv_Reliable" tests="8" failures="0" disabled="0" errors="0" time="9.486">
-    <testcase name="TestOpen" status="run" time="9.478" classname="TestEnv_Reliable" />
+<testsuites tests="8" failures="0" disabled="0" errors="0" timestamp="2020-06-07T21:48:52" time="8.106" name="AllTests">
+  <testsuite name="TestEnv_Reliable" tests="8" failures="0" disabled="0" errors="0" time="8.104">
+    <testcase name="TestOpen" status="run" time="8.098" classname="TestEnv_Reliable" />
     <testcase name="TestBind_Simple" status="run" time="0.001" classname="TestEnv_Reliable" />
     <testcase name="TestBind_DoubleBind" status="run" time="0.001" classname="TestEnv_Reliable" />
     <testcase name="TestBind_GetSockName" status="run" time="0.001" classname="TestEnv_Reliable" />
     <testcase name="TestBind_OverlapPort" status="run" time="0" classname="TestEnv_Reliable" />
-    <testcase name="TestBind_OverlapClosed" status="run" time="0.001" classname="TestEnv_Reliable" />
-    <testcase name="TestBind_DifferentIP_SamePort" status="run" time="0.001" classname="TestEnv_Reliable" />
+    <testcase name="TestBind_OverlapClosed" status="run" time="0" classname="TestEnv_Reliable" />
+    <testcase name="TestBind_DifferentIP_SamePort" status="run" time="0" classname="TestEnv_Reliable" />
     <testcase name="TestBind_SameIP_DifferentPort" status="run" time="0" classname="TestEnv_Reliable" />
   </testsuite>
 </testsuites>

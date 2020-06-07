@@ -204,6 +204,8 @@ struct socketInterface
 
 	size_t cwnd_sent_prev;
 	size_t cwnd_rcvd_prev;
+	size_t retransmission_count;
+	int retransmission_num;
 
 	std::list<struct packetData *> *receiver_buffer;
 	size_t receiver_unused;
