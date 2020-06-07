@@ -264,9 +264,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 			temp->state = TCP_ESTAB;
 
-			timer_args = make_TimerArgs(temp, NULL, TIMER_SOCKET);
-			temp->congestion_timer = addTimer(timer_args, 5 * 1000 * 1000);
-
 		// on duplicate connect. active
 		} else if(temp->state == TCP_SYN_RCVD) {
 			// don't use deleteBeforeAcknum because of simultaneous connect.
@@ -293,9 +290,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			returnSystemCall(returnUUID, 0);
 
 			temp->state = TCP_ESTAB;
-
-			timer_args = make_TimerArgs(temp, NULL, TIMER_SOCKET);
-			temp->congestion_timer = addTimer(timer_args, 5 * 1000 * 1000);
 
 		} else {
 			temp->acknum = htonl(ntohl(oppo_seq) + 1);
@@ -337,9 +331,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				}
 
 				temp->state = TCP_ESTAB;
-
-				timer_args = make_TimerArgs(temp, NULL, TIMER_SOCKET);
-				temp->congestion_timer = addTimer(timer_args, 5 * 1000 * 1000);
 
 				parent_sock = find_sock_byId(temp->pid, temp->parent_sockfd);
 				if(parent_sock != NULL)
@@ -417,8 +408,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			}
 
 			temp->state = TCP_ESTAB;
-			timer_args = make_TimerArgs(temp, NULL, TIMER_SOCKET);
-			temp->congestion_timer = addTimer(timer_args, 5 * 1000 * 1000);
 
 			parent_sock = find_sock_byId(temp->pid, temp->parent_sockfd);
 			if (parent_sock != NULL)
@@ -514,6 +503,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						if(temp->con_state == CON_SLOW_START || temp->con_state == CON_AVOID) {
 							temp->ssthresh = temp->cwnd_max / 2;
 							temp->cwnd_max = temp->ssthresh + 3*MSS;
+							temp->cwnd_using = 0;
 							temp->con_state = CON_FAST_RECOVERY;
 						}
 					}
@@ -538,11 +528,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						temp->sender_ackchange = false;
 					}
 
-					if(temp->con_state == CON_SLOW_START) {
-						temp->cwnd_max += MSS;
-					} else if(temp->con_state == CON_AVOID) {
-						temp->cwnd_max += (int)((float)MSS * ((float)MSS/(float)temp->cwnd_max));
-					} else if(temp->con_state == CON_FAST_RECOVERY) {
+					if(temp->con_state == CON_FAST_RECOVERY) {
 						temp->cwnd_max = temp->ssthresh;
 						temp->cwnd_using = 0;
 						temp->con_state = CON_AVOID;
@@ -551,34 +537,37 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 					temp->dupl_num = 0;
 					temp->sender_recentack = oppo_ack;
 				}
+				
+				temp->acknum = oppo_seq;
+				if(!(deleteBeforeAcknum_senderBuffer(temp, oppo_ack) || temp->con_state == CON_FAST_RECOVERY))
+					return;
 
 				if(temp->con_state == CON_SLOW_START and temp->cwnd_max >= temp->ssthresh)
 					temp->con_state = CON_AVOID;
+				if(temp->cwnd_sent_prev < temp->cwnd_rcvd_prev) {
+					temp->cwnd_sent_prev = 0;
+					temp->cwnd_rcvd_prev = 0;
+				}
 				
-				//printf("ACK received. state : %d, cwnd max : %d, cwnd using : %d, ssthresh : %d\n", temp->con_state, temp->cwnd_max, temp->cwnd_using, temp->ssthresh);
-				temp->acknum = oppo_seq;
-				if(!deleteBeforeAcknum_senderBuffer(temp, oppo_ack))
-					return;
+				printf("ACK received. ack : %d, state : %d, cwnd max : %d, cwnd using : %d, ssthresh : %d\n", ntohl(oppo_ack), temp->con_state, temp->cwnd_max, temp->cwnd_using, temp->ssthresh);
 
 				// if write() already called
 				if(temp->write_syscallUUID != (UUID)-1) {
 					dataSyscallArgs = find_dataSyscall_byUUID(temp->write_syscallUUID);
 					
-					if(temp->sender_unused == 51200) {
-						if(temp->sender_unused < dataSyscallArgs->count) {
-							saved_data_len = write_buffer(temp, dataSyscallArgs->buf, temp->sender_unused);
-						} else {
-							saved_data_len = write_buffer(temp, dataSyscallArgs->buf, dataSyscallArgs->count);
-						}
+					if(temp->sender_unused < dataSyscallArgs->count) {
+						saved_data_len = write_buffer(temp, dataSyscallArgs->buf, temp->sender_unused);
+					} else {
+						saved_data_len = write_buffer(temp, dataSyscallArgs->buf, dataSyscallArgs->count);
+					}
 
-						if(saved_data_len > 0) {
-							dataUUID_list.remove(dataSyscallArgs);
-							free(dataSyscallArgs);
+					if(saved_data_len > 0) {
+						dataUUID_list.remove(dataSyscallArgs);
+						free(dataSyscallArgs);
 
-							returnUUID = temp->write_syscallUUID;
-							temp->write_syscallUUID = -1;
-							returnSystemCall(returnUUID, saved_data_len);
-						}
+						returnUUID = temp->write_syscallUUID;
+						temp->write_syscallUUID = -1;
+						returnSystemCall(returnUUID, saved_data_len);
 					}
 				}
 			}
@@ -608,42 +597,20 @@ void TCPAssignment::timerCallback(void* payload)
 			remove_socket(timed_socket);
 		}
 	} else if(timer_args->flag == TIMER_PACKET) {
-		timed_socket->ssthresh = timed_socket->cwnd_max / 2;
-		timed_socket->cwnd_max = MSS;
-		timed_socket->cwnd_using = 0;
-		timed_socket->con_state = CON_SLOW_START;
-
 		packetData = timer_args->packet;
-		//printf("retransmission. %d\n", ntohl(packetData->start_num));
-		send_packet(timed_socket, packetData->flag, packetData);
-	} else if(timer_args->flag == TIMER_SOCKET) {
-		cancelTimer(timed_socket->congestion_timer);
-		timed_socket->cwnd_using = 0;
 
-		// if write() already called
-		if(timed_socket->write_syscallUUID != (UUID)-1) {
-			dataSyscallArgs = find_dataSyscall_byUUID(timed_socket->write_syscallUUID);
-			
-			if(timed_socket->sender_unused == 51200) {
-				if(timed_socket->sender_unused < dataSyscallArgs->count) {
-					saved_data_len = write_buffer(timed_socket, dataSyscallArgs->buf, timed_socket->sender_unused);
-				} else {
-					saved_data_len = write_buffer(timed_socket, dataSyscallArgs->buf, dataSyscallArgs->count);
-				}
-
-				if(saved_data_len > 0) {
-					dataUUID_list.remove(dataSyscallArgs);
-					free(dataSyscallArgs);
-
-					returnUUID = timed_socket->write_syscallUUID;
-					timed_socket->write_syscallUUID = -1;
-					returnSystemCall(returnUUID, saved_data_len);
-				}
-			}
+		if(packetData->size != 0) {
+			printf("time out packet!\n");
+			timed_socket->ssthresh = timed_socket->cwnd_max / 2;
+			timed_socket->cwnd_max = MSS;
+			timed_socket->cwnd_using = 0;
+			timed_socket->con_state = CON_SLOW_START;
 		}
 
-		timed_socket->congestion_timer = addTimer(timer_args, 5 * 1000 * 1000);
-		//printf("timer socket!\n");
+		//printf("retransmission. %d\n", ntohl(packetData->start_num));
+		send_packet(timed_socket, packetData->flag, packetData);
+		if(packetData->size != 0)
+			timed_socket->cwnd_using -= packetData->size;
 	}
 }
 
@@ -673,6 +640,9 @@ int TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int type, int proto
 	new_sock->sender_unused = 51200;
 	new_sock->cwnd_max = MSS;
 	new_sock->cwnd_using = 0;
+	new_sock->cwnd_sent_prev = 0;
+	new_sock->cwnd_rcvd_prev = 0;
+
 	new_sock->receiver_unused = 51200;
 	new_sock->oppo_window = 0;
 
@@ -680,7 +650,6 @@ int TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int type, int proto
 	new_sock->con_state = CON_SLOW_START;
 
 	new_sock->timed_wait_timer = -1;
-	new_sock->congestion_timer = -1;
 
 	new_sock->sender_buffer = new std::list<struct packetData*>();
 	new_sock->receiver_buffer = new std::list<struct packetData*>();
@@ -959,6 +928,7 @@ int TCPAssignment::syscall_write(UUID syscallUUID, int pid, int sockfd, const vo
 
 	// block if sender buffer is full
 	if(temp->sender_unused <= 0) {
+		printf("block. sender full\n");
 		syscallArgs = (struct dataSyscallArgs *) malloc(sizeof(struct dataSyscallArgs));
 		syscallArgs->syscallUUID = syscallUUID;
 
@@ -971,11 +941,14 @@ int TCPAssignment::syscall_write(UUID syscallUUID, int pid, int sockfd, const vo
 		return -2;
 	}
 
-	if(temp->sender_unused < count)
+	if(temp->sender_unused < count) {
 		result = write_buffer(temp, (void *)buf, temp->sender_unused);
-	result = write_buffer(temp, (void *)buf, count);
+	} else {
+		result = write_buffer(temp, (void *)buf, count);
+	}
 
 	if(result == 0) {
+		printf("block. no write data\n");
 		syscallArgs = (struct dataSyscallArgs *) malloc(sizeof(struct dataSyscallArgs));
 		syscallArgs->syscallUUID = syscallUUID;
 
@@ -1122,6 +1095,9 @@ int TCPAssignment::make_DuplSocket(struct socketInterface *listener, in_addr_t o
 	dupl_sock->sender_unused = 51200;
 	dupl_sock->cwnd_max = MSS;
 	dupl_sock->cwnd_using = 0;
+	dupl_sock->cwnd_sent_prev = 0;
+	dupl_sock->cwnd_rcvd_prev = 0;
+
 	dupl_sock->receiver_unused = 51200;
 	dupl_sock->oppo_window = 0;
 
@@ -1129,7 +1105,6 @@ int TCPAssignment::make_DuplSocket(struct socketInterface *listener, in_addr_t o
 	dupl_sock->con_state = CON_SLOW_START;
 
 	dupl_sock->timed_wait_timer = -1;
-	dupl_sock->congestion_timer = -1;
 
 	dupl_sock->sender_buffer = new std::list<struct packetData*>();
 	dupl_sock->receiver_buffer = new std::list<struct packetData*>();
@@ -1194,7 +1169,6 @@ void TCPAssignment::remove_socket(struct socketInterface *socket)
 
 	acceptUUID_list.remove(find_acceptSyscall_byId(socket->pid, socket->sockfd));
 	dataUUID_list.remove(find_dataSyscall_byUUID(socket->read_syscallUUID));
-	cancelTimer(socket->congestion_timer);
 
 	removeFileDescriptor(socket->pid, socket->sockfd);
 	free(socket);
@@ -1257,6 +1231,9 @@ size_t TCPAssignment::write_buffer(struct socketInterface *sender, void *buf, si
 	size_t temp_size, packet_size;
 	struct packetData *packet_data;
 	void *temp_data;
+	struct timerArgs *timer_args;
+
+	//printf("initial count : %d\n", count);
 	sender->oppo_window = estimate_oppo_window(sender, sender->sender_recentack);
 	// if opponent receiver window size is smaller than count
 	if(sender->oppo_window < count) {
@@ -1265,11 +1242,12 @@ size_t TCPAssignment::write_buffer(struct socketInterface *sender, void *buf, si
 		temp_size = count;
 	}
 
+	
 	if(temp_size > 0 && (sender->cwnd_max - sender->cwnd_using) < temp_size)
 		temp_size = (sender->cwnd_max - sender->cwnd_using) - ((sender->cwnd_max - sender->cwnd_using)%MSS);
+	
 
 	while(saved_data_len < temp_size) {
-		//printf("temp_size : %d, window : %d, cwnd max : %d, cwnd using : %d\n", temp_size, sender->oppo_window, sender->cwnd_max, sender->cwnd_using);
 		// chunk packet to 512 bytes
 		if((temp_size - saved_data_len) > 512) {
 			packet_size = 512;
@@ -1290,9 +1268,20 @@ size_t TCPAssignment::write_buffer(struct socketInterface *sender, void *buf, si
 		sender->sender_buffer_last = ntohl(htonl(sender->sender_buffer_last) + packet_data->size);
 		saved_data_len += packet_data->size;
 
+		printf("seq : %d, temp_size : %d, window : %d, cwnd max : %d, cwnd using : %d, ssthresh : %d\n", ntohl(packet_data->start_num), temp_size, sender->oppo_window, sender->cwnd_max, sender->cwnd_using, sender->ssthresh);
+		printf("cwnd sent : %d, cwnd rcvd : %d\n", sender->cwnd_sent_prev, sender->cwnd_rcvd_prev);
 		send_packet(sender, FLAG_ACK, packet_data);
 	}
 
+	// for checking all data in prev round received.
+	if((saved_data_len == 0 && sender->cwnd_sent_prev <= sender->cwnd_rcvd_prev) || sender->cwnd_using >= 51200) {
+		printf("cwnd reset.\n");
+		sender->cwnd_sent_prev = sender->cwnd_using;
+		sender->cwnd_using = 0;
+		sender->cwnd_rcvd_prev = 0;
+	}
+
+	printf("saved. %d\n", saved_data_len);
 	return saved_data_len;
 }
 
@@ -1346,6 +1335,16 @@ bool TCPAssignment::deleteBeforeAcknum_senderBuffer(struct socketInterface *sock
 
 		if(temp_packetnum <= ntohl(oppo_ack)) {
 			socket->sender_unused += packet_data->size;
+
+			if(packet_data->size > 0) {
+				if(socket->con_state == CON_SLOW_START) {
+					socket->cwnd_max += MSS;
+				} else if(socket->con_state == CON_AVOID) {
+					socket->cwnd_max += (int)((float)MSS * ((float)MSS/(float)socket->cwnd_max));
+				}
+			}
+
+			socket->cwnd_rcvd_prev += packet_data->size;
 			socket->sender_buffer->pop_front();
 			
 			if(packet_data->timer != (UUID)-1) {
@@ -1375,7 +1374,7 @@ struct timerArgs* TCPAssignment::make_TimerArgs(struct socketInterface *socket, 
 	timer_args->packet = packet;
 	timer_args->flag = flag;
 
-	if(packet != NULL)
+	if(flag == TIMER_PACKET)
 		packet->timer_args = timer_args;
 
 	return timer_args;
@@ -1388,8 +1387,9 @@ void TCPAssignment::direct_retransmit(struct socketInterface *socket)
 
 	//printf("window size : %d\n", window_size);
 	for(iter = socket->sender_buffer->begin(); iter != socket->sender_buffer->end(); iter++) {
-		if(count <= socket->oppo_window && count <= (socket->cwnd_max - socket->cwnd_using)) {
+		if(count <= socket->oppo_window && count <= ((int)socket->cwnd_max - (int)socket->cwnd_using)) {
 			//printf("direct retransmit : %d\n", ntohl((*iter)->start_num));
+			printf("direct retransmit. cwnd using : %d\n", socket->cwnd_using);
 			send_packet(socket, FLAG_ACK, (*iter));
 			count += (*iter)->size;
 		} else {

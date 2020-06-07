@@ -195,13 +195,16 @@ struct socketInterface
 	int parent_sockfd;
 
 	UUID timed_wait_timer;
-	UUID congestion_timer;
 
 	// internal sender buffer
 	std::list<struct packetData *> *sender_buffer;
 	size_t sender_unused;
 	size_t cwnd_max;
 	size_t cwnd_using;
+
+	size_t cwnd_sent_prev;
+	size_t cwnd_rcvd_prev;
+
 	std::list<struct packetData *> *receiver_buffer;
 	size_t receiver_unused;
 	unsigned short oppo_window;
