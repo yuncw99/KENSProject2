@@ -616,7 +616,7 @@ void TCPAssignment::timerCallback(void* payload)
 		}
 
 		//printf("retransmission. seq : %d, window : %d\n", ntohl(packetData->start_num), timed_socket->oppo_window);
-		printf("retransmit. RTO : %d, seq :%d\n", timed_socket->RTO, ntohl(packetData->start_num));
+		//printf("retransmit. RTO : %d, seq :%d\n", timed_socket->RTO, ntohl(packetData->start_num));
 		send_packet(timed_socket, packetData->flag, packetData);
 		if(packetData->size != 0)
 			timed_socket->cwnd_using -= packetData->size;
@@ -1377,7 +1377,7 @@ bool TCPAssignment::deleteBeforeAcknum_senderBuffer(struct socketInterface *sock
 				socket->SRTT = ((float)1 - TIMER_ALPHA) * socket->SRTT + TIMER_ALPHA * (float)(socket->RTT);
 				socket->RTO = (socket->SRTT * 2.2 + (float)TIMER_K * socket->RTTVAR);
 
-				printf("ACK received. RTT : %f, seqnum : %d, RTO : %d\n", (endTime - packet_data->startTime)/(float)1000000, ntohl(packet_data->start_num), socket->RTO);
+				//printf("ACK received. RTT : %f, seqnum : %d, RTO : %d\n", (endTime - packet_data->startTime)/(float)1000000, ntohl(packet_data->start_num), socket->RTO);
 				if(socket->RTO >= 1000) {
 					socket->RTT = 35;
 					socket->SRTT = socket->RTT;
@@ -1430,7 +1430,7 @@ void TCPAssignment::direct_retransmit(struct socketInterface *socket)
 		if(count < socket->oppo_window && count < socket->cwnd_sent_prev && (socket->cwnd_max - socket->cwnd_using) >= (*iter)->size) {
 			//printf("direct. RTO : %d\n", socket->RTO);
 			//printf("direct retransmit. cwnd using : %d\n", socket->cwnd_using);
-			printf("direct retransmit. seq : %d\n", ntohl((*iter)->start_num));
+			//printf("direct retransmit. seq : %d\n", ntohl((*iter)->start_num));
 			(*iter)->is_retrans = true;
 			send_packet(socket, FLAG_ACK, (*iter));
 			count += (*iter)->size;
