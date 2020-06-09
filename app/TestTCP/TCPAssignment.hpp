@@ -48,7 +48,7 @@ private:
 	virtual size_t write_buffer(struct socketInterface *sender, void *buf, size_t count) final;
 	virtual struct packetData* make_PacketData(void* data, size_t size, int start_num, int flag) final;
 	virtual void push_packet_sortbySeqnum(std::list<struct packetData *> *buffer, struct packetData *data) final;
-	virtual bool deleteBeforeAcknum_senderBuffer(struct socketInterface *socket, int oppo_ack) final;
+	virtual bool deleteBeforeAcknum_senderBuffer(struct socketInterface *socket, int oppo_ack, Time endTime) final;
 	virtual struct timerArgs* make_TimerArgs(struct socketInterface *socket, struct packetData *data, int flag) final;
 	virtual void direct_retransmit(struct socketInterface *socket) final;
 
@@ -74,9 +74,9 @@ public:
 	const size_t IH_SIZE = 34;
 	const size_t MSS = 512;
 
-	const size_t TIMER_K = 4;
-	const float TIMER_ALPHA = 1/8;
-	const float TIMER_BETA = 1/4;
+	const size_t TIMER_K = 2;
+	const float TIMER_ALPHA = (float)1/(float)8;
+	const float TIMER_BETA = (float)1/(float)4;
 
 protected:
 	virtual void systemCallback(UUID syscallUUID, int pid, const SystemCallParameter& param) final;
@@ -157,6 +157,8 @@ struct packetData
 
 	UUID timer;
 	struct timerArgs *timer_args;
+	Time startTime;
+	bool is_retrans;
 };
 
 struct timerArgs
@@ -222,10 +224,10 @@ struct socketInterface
 	size_t ssthresh;
 	int con_state;
 
-	size_t RTT;
-	size_t SRTT;
-	size_t RTTVAR;
-	size_t RTO;
+	float RTT;
+	float SRTT;
+	float RTTVAR;
+	int RTO;
 };
 
 }
