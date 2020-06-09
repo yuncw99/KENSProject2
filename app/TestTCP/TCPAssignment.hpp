@@ -74,6 +74,10 @@ public:
 	const size_t IH_SIZE = 34;
 	const size_t MSS = 512;
 
+	const size_t TIMER_K = 4;
+	const float TIMER_ALPHA = 1/8;
+	const float TIMER_BETA = 1/4;
+
 protected:
 	virtual void systemCallback(UUID syscallUUID, int pid, const SystemCallParameter& param) final;
 	virtual void packetArrived(std::string fromModule, Packet* packet) final;
@@ -203,7 +207,6 @@ struct socketInterface
 	size_t cwnd_using;
 
 	size_t cwnd_sent_prev;
-	size_t cwnd_rcvd_prev;
 	size_t retransmission_count;
 	int retransmission_num;
 
@@ -218,6 +221,11 @@ struct socketInterface
 
 	size_t ssthresh;
 	int con_state;
+
+	size_t RTT;
+	size_t SRTT;
+	size_t RTTVAR;
+	size_t RTO;
 };
 
 }

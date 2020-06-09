@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites tests="3" failures="0" disabled="0" errors="0" timestamp="2020-06-07T21:49:01" time="92.631" name="AllTests">
-  <testsuite name="TestEnv_Congestion0" tests="1" failures="0" disabled="0" errors="0" time="41.583">
-    <testcase name="TestCongestion0" status="run" time="41.583" classname="TestEnv_Congestion0" />
+<testsuites tests="3" failures="0" disabled="0" errors="0" timestamp="2020-06-09T14:04:29" time="265.293" name="AllTests">
+  <testsuite name="TestEnv_Congestion0" tests="1" failures="0" disabled="0" errors="0" time="125.901">
+    <testcase name="TestCongestion0" status="run" time="125.9" classname="TestEnv_Congestion0" />
   </testsuite>
-  <testsuite name="TestEnv_Congestion1" tests="1" failures="0" disabled="0" errors="0" time="8.694">
-    <testcase name="TestCongestion1" status="run" time="8.694" classname="TestEnv_Congestion1" />
+  <testsuite name="TestEnv_Congestion1" tests="1" failures="0" disabled="0" errors="0" time="22.577">
+    <testcase name="TestCongestion1" status="run" time="22.576" classname="TestEnv_Congestion1" />
   </testsuite>
-  <testsuite name="TestEnv_Congestion2" tests="1" failures="0" disabled="0" errors="0" time="42.352">
-    <testcase name="TestCongestion2" status="run" time="42.351" classname="TestEnv_Congestion2" />
+  <testsuite name="TestEnv_Congestion2" tests="1" failures="0" disabled="0" errors="0" time="116.81">
+    <testcase name="TestCongestion2" status="run" time="116.809" classname="TestEnv_Congestion2" />
   </testsuite>
 </testsuites>
